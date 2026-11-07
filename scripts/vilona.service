@@ -1,0 +1,25 @@
+#!/bin/bash
+# Systemd service unit for Vilona AI v2
+# Install: sudo cp vilona.service /etc/systemd/system/
+#          sudo systemctl enable vilona
+#          sudo systemctl start vilona
+
+[Unit]
+Description=Vilona AI v2 Trading Agent
+After=network.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/home/openclaw/projects/vilona-v2
+Environment="PATH=/home/openclaw/projects/vilona-v2/.venv/bin:/usr/bin:/bin"
+Environment="vilona_PAPER_TRADING=true"
+ExecStart=/home/openclaw/projects/vilona-v2/.venv/bin/python3 app_server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
