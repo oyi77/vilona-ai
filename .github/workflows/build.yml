@@ -1,0 +1,60 @@
+name: Build Vilona AI
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Nuitka
+        run: pip install nuitka
+      - name: Build Windows Executable
+        run: python scripts/build.py windows
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vilona-AI-windows
+          path: build/Vilona-AI.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Nuitka
+        run: pip install nuitka
+      - name: Install patchelf
+        run: sudo apt-get update && sudo apt-get install -y patchelf
+      - name: Build Linux Executable
+        run: python scripts/build.py linux
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vilona-AI-linux
+          path: build/Vilona-AI
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install Nuitka
+        run: pip install nuitka
+      - name: Build macOS Executable
+        run: python scripts/build.py macos
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vilona-AI-macos
+          path: build/Vilona-AI.app
