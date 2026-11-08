@@ -1,21 +1,12 @@
-from __future__ import annotations
-from typing import Optional, Set
-
-
-def _allowed_chat_ids() -> Set[int]:
+# Authentication helpers
+def is_authorized(chat_id: int) -> bool:
     from config import get_config
     cfg = get_config()
-    return set(cfg.telegram.chat_ids) | set(cfg.telegram.admin_chat_ids)
-
-
-def is_authorized(chat_id: int) -> bool:
-    allowed = _allowed_chat_ids()
-    if not allowed:
-        return True
-    return chat_id in allowed
-
+    authorized = getattr(cfg.telegram, 'authorized_users', [cfg.telegram.chat_ids[0]]) if cfg.telegram.chat_ids else [cfg.telegram.chat_ids[0]]
+    return chat_id in (authorized if isinstance(authorized, list) else [authorized])
 
 def is_admin(chat_id: int) -> bool:
     from config import get_config
     cfg = get_config()
-    return chat_id in cfg.telegram.admin_chat_ids
+    admins = getattr(cfg.telegram, 'admin_users', cfg.telegram.chat_ids[:1])
+    return chat_id in (admins if isinstance(admins, list) else [admins])

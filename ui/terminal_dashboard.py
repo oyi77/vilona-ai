@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import time
+import logging
+from typing import Any, List, Dict
+from datetime import datetime
+
+from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.layout import Layout
+from rich.text import Text
+from rich.align import Align
+from rich.columns import Columns
+
+logger = logging.getLogger(__name__)
+console = Console()
+
+class TerminalDashboard:
+    def __init__(self, bridge: Any, config: Any):
+        self.bridge = bridge
+        self.config = config
+        self.running = False
+        self._last_update = 0
+        self._logs: List[str] = []
+        
+    def add_log(self, message: str):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self._logs.append(f"[{timestamp}] {message}")
+        if len(self._logs) > 50:
+            self._logs.pop(0)
+
+    def _get_header(self) -> Panel:
+        mode = "LIVE" if not getattr(self.config.trading, 'paper_mode', True) else "PAPER"
+        exchange = self.config.exchange.name.upper()
+        
+        # Try to get current P/L if available
+        try:
+            pl, _, _ = self.bridge.calc_daily_pl('BTC/USDT') if hasattr(self.bridge, 'calc_daily_pl') else (0.0, 0, 0)
+            pnl_color = "green" if pl > 0 else "red" if pl < 0 else "white"
+            pnl_text = f"[{pnl_color}]P/L: {pl:+.2f} USDT[/{pnl_color}]"
+        except:
+            pnl_text = "P/L: ---"
+
+        title = Text("🤖 Vilona AI v2", style="bold magenta")
+        content = Text(f" {mode} | {exchange} | Status: RUNNING | {pnl_text} ", style="white")
+        
+        return Panel(
+            Align.center(content),
+            title=title,
+            border_style="bright_blue",
+            padding=(0, 1)
+        )
+
+    def _get_log_table(self) -> Table:
+        table = Table(show_header=False, box=None, expand=True)
+        for log in self._logs[-15:]:
+            # Simple color coding based on keywords
+            style = "white"
+            if "BUY" in log.upper(): style = "green"
+            elif "SELL" in log.upper(): style = "red"
+            elif "CLOSE" in log.upper(): style = "cyan"
+            elif "SCAN" in log.upper(): style = "yellow"
+            
+            table.add_row(Text(log, style=style))
+        return table
+
+    def _get_footer(self) -> Panel:
+        uptime = "Calculating..."
+        # Simplified uptime
+        pos_count = len(self.bridge.get_positions()) if hasattr(self.bridge, 'get_positions') else 0
+        
+        content = Text(
+            f"Uptime: {int(time.time() - self._stats_start)}s | "
+            f"Positions: {pos_count} | "
+            f"Mode: {'PAPER' if getattr(self.config.trading, 'paper_mode', True) else 'LIVE'}",
+            style="dim white"
+        )
+        return Panel(Align.center(content), border_style="dim")
+
+    def start(self):
+        self._stats_start = time.time()
+        self.running = True
+        
+        layout = Layout()
+        layout.split_column(
+            Layout(name="header", size=3),
+            Layout(name="body", minimum_size=10),
+            Layout(name="footer", size=3),
+        )
+
+        with Live(layout, refresh_per_second=1, screen=True) as live:
+            while self.running:
+                layout["header"].update(self._get_header())
+                layout["body"].update(Panel(self._get_log_table(), title="Live Trading Feed", border_style="bright_blue"))
+                layout["footer"].update(self._get_footer())
+                time.sleep(0.5)
+
+    def stop(self):
+        self.running = False
