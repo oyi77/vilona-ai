@@ -166,11 +166,12 @@ class Config:
                     errors.append("paper_trading=False requires exchange.api_key")
                 if not self.exchange.api_secret:
                     errors.append("paper_trading=False requires exchange.api_secret")
-
-        if not self.telegram.bot_token:
-            errors.append("telegram.bot_token must be non-empty")
-        if not self.telegram.chat_ids:
-            errors.append("telegram.chat_ids must be non-empty list")
+            if not self.telegram.bot_token:
+                errors.append("telegram.bot_token must be non-empty")
+            if not self.telegram.chat_ids:
+                errors.append("telegram.chat_ids must be non-empty list")
+            if not self.llm.api_key:
+                errors.append("llm.api_key must be non-empty")
 
         if not self.trading.symbols:
             errors.append("trading.symbols must be non-empty")
@@ -179,8 +180,6 @@ class Config:
         if self.trading.max_daily_loss_pct <= 0 or self.trading.max_daily_loss_pct > 50:
             errors.append("trading.max_daily_loss_pct must be > 0 and <= 50")
 
-        if not self.llm.api_key:
-            errors.append("llm.api_key must be non-empty")
         if not self.enabled_personas:
             errors.append("enabled_personas must be non-empty")
 

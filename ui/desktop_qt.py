@@ -25,6 +25,9 @@ from trading.bridge_ccxt import CCXTBridge
 from trading.bridge_mt5 import MT5Bridge
 
 
+if not PYQT6_AVAILABLE:
+    raise ImportError("PyQt6 is required for the desktop UI. Install with: pip install PyQt6")
+
 class DataRefreshWorker(QThread):
     """Background worker for data refresh"""
     data_ready = pyqtSignal(dict)
