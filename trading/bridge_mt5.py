@@ -17,38 +17,45 @@ except ImportError:
 from trading.bridge_ccxt import Tick, SymbolInfo, Position, Order
 
 
-MTF_TIMEFRAMES = {
-    'M1': mt5.TIMEFRAME_M1,
-    'M5': mt5.TIMEFRAME_M5,
-    'M15': mt5.TIMEFRAME_M15,
-    'M30': mt5.TIMEFRAME_M30,
-    'H1': mt5.TIMEFRAME_H1,
-    'H4': mt5.TIMEFRAME_H4,
-    'D1': mt5.TIMEFRAME_D1
-}
+MTF_TIMEFRAMES = {}
+if mt5 is not None:
+    MTF_TIMEFRAMES = {
+        'M1': mt5.TIMEFRAME_M1,
+        'M5': mt5.TIMEFRAME_M5,
+        'M15': mt5.TIMEFRAME_M15,
+        'M30': mt5.TIMEFRAME_M30,
+        'H1': mt5.TIMEFRAME_H1,
+        'H4': mt5.TIMEFRAME_H4,
+        'D1': mt5.TIMEFRAME_D1
+    }
 
-TYPE_MAP = {
-    mt5.ORDER_TYPE_BUY: 'buy',
-    mt5.ORDER_TYPE_SELL: 'sell',
-    mt5.ORDER_TYPE_BUY_LIMIT: 'buy_limit',
-    mt5.ORDER_TYPE_SELL_LIMIT: 'sell_limit',
-    mt5.ORDER_TYPE_BUY_STOP: 'buy_stop',
-    mt5.ORDER_TYPE_SELL_STOP: 'sell_stop',
-}
+TYPE_MAP = {}
+POSITION_TYPE_MAP = {}
+ORDER_TYPE_MAP_REV = {}
 
-POSITION_TYPE_MAP = {
-    mt5.POSITION_TYPE_BUY: 'buy',
-    mt5.POSITION_TYPE_SELL: 'sell',
-}
+if mt5 is not None:
+    TYPE_MAP = {
+        mt5.ORDER_TYPE_BUY: 'buy',
+        mt5.ORDER_TYPE_SELL: 'sell',
+        mt5.ORDER_TYPE_BUY_LIMIT: 'buy_limit',
+        mt5.ORDER_TYPE_SELL_LIMIT: 'sell_limit',
+        mt5.ORDER_TYPE_BUY_STOP: 'buy_stop',
+        mt5.ORDER_TYPE_SELL_STOP: 'sell_stop',
+    }
 
-ORDER_TYPE_MAP_REV = {
-    'buy': mt5.ORDER_TYPE_BUY,
-    'sell': mt5.ORDER_TYPE_SELL,
-    'buy_limit': mt5.ORDER_TYPE_BUY_LIMIT,
-    'sell_limit': mt5.ORDER_TYPE_SELL_LIMIT,
-    'buy_stop': mt5.ORDER_TYPE_BUY_STOP,
-    'sell_stop': mt5.ORDER_TYPE_SELL_STOP,
-}
+    POSITION_TYPE_MAP = {
+        mt5.POSITION_TYPE_BUY: 'buy',
+        mt5.POSITION_TYPE_SELL: 'sell',
+    }
+
+    ORDER_TYPE_MAP_REV = {
+        'buy': mt5.ORDER_TYPE_BUY,
+        'sell': mt5.ORDER_TYPE_SELL,
+        'buy_limit': mt5.ORDER_TYPE_BUY_LIMIT,
+        'sell_limit': mt5.ORDER_TYPE_SELL_LIMIT,
+        'buy_stop': mt5.ORDER_TYPE_BUY_STOP,
+        'sell_stop': mt5.ORDER_TYPE_SELL_STOP,
+    }
 
 
 class MT5Bridge:
