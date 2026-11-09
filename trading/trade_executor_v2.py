@@ -19,21 +19,6 @@ from trading.bridge_ccxt import CCXTBridge, Tick, Position, Order, SymbolInfo
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class TrailingState:
-    """Track per-ticket trailing state to avoid redundant modifications."""
-    start_time_ms: int = 0
-    started: bool = False
-    last_modified_ticket: Optional[int] = None
-
-
-_trailing_started: Dict[int, TrailingState] = {}
-
-
-def _prune_trailing_state(active_tickets: set):
-    _trailing_started.update({k: v for k, v in _trailing_started.items() if k in active_tickets})
-
-
 def _atr(mtf_data: Dict[str, List[Dict]], symbol: str, timeframe: str) -> float:
     rates = mtf_data.get(timeframe) or []
     if len(rates) < 20:

@@ -75,8 +75,7 @@ class DatabaseConfig:
 @dataclass
 class BuildConfig:
     """Build configuration for packaging"""
-    version: str = "2.0.0"
-    app_name: str = "Vilona AI-v2"
+    version: str = "Vilona AI-v2.2"
     icon_path: Optional[str] = None
 
 

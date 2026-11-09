@@ -140,9 +140,10 @@ def test_trader_parser_handles_bad_json():
     assert sig.symbol == "BTC/USDT"
 
 
-def test_judge_parser_defaults_approve_on_garbage():
+def test_judge_parser_defaults_veto_on_garbage():
     approved, reason = parse_judge("garbage")
-    assert approved is True
+    assert approved is False
+    assert reason == "unparseable judge response - veto"
 
 
 def test_researcher_parser_defaults_unknown():

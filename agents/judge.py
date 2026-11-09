@@ -43,6 +43,9 @@ def parse_judge(raw: str) -> tuple[bool, str]:
                 data = json.loads(raw[s:e + 1])
             except json.JSONDecodeError:
                 data = {}
-    verdict = str(data.get("verdict", "APPROVE")).upper()
-    reason = str(data.get("reason", ""))[:500]
+    # Fail-closed: when the LLM response is unparseable or omits an explicit
+    # APPROVE verdict, veto the trade. Parsing garbage must never silently
+    # approve an order.
+    verdict = str(data.get("verdict", "VETO")).upper() if data else "VETO"
+    reason = str(data.get("reason", ""))[:500] if data else "unparseable judge response - veto"
     return (verdict != "VETO", reason)

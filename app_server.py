@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import threading
+import logging
+logger = logging.getLogger('vilona-ai')
 import sys
 from pathlib import Path
 
@@ -41,7 +43,10 @@ def main():
     # Terminal Dashboard (Blocking/Live)
     try:
         def run_tg():
-            tg_controller.start()
+            try:
+                tg_controller.start()
+            except Exception as e:
+                logger.error(f"Telegram Bot thread crashed: {e}")
         
         tg_thread = threading.Thread(target=run_tg, daemon=True)
         tg_thread.start()
@@ -54,6 +59,8 @@ def main():
         
     except KeyboardInterrupt:
         print("Shutting down Vilona AI...")
+    except (SystemExit, KeyboardInterrupt):
+        raise
     except Exception as e:
         print(f"Runtime Error: {e}")
         return 1

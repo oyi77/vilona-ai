@@ -6,5 +6,8 @@ nuitka>=2.0
 pyyaml>=6.0
 sqlite-utils>=3.0
 MetaTrader5
-rich\n pystray\nPillow
+rich
+pystray
+Pillow
 win10toast
+PyQt6>=6.0.0
