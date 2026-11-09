@@ -6,16 +6,18 @@
 
 [Unit]
 Description=Vilona AI v2 Trading Agent
-After=network.target
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=openclaw
 Group=openclaw
-WorkingDirectory=/home/openclaw/projects/vilona-v2
-Environment="PATH=/home/openclaw/projects/vilona-v2/.venv/bin:/usr/bin:/bin"
+WorkingDirectory=/home/openclaw/projects/vilona-ai
+EnvironmentFile=-/home/openclaw/projects/vilona-ai/.env
+Environment="PATH=/home/openclaw/projects/vilona-ai/.venv/bin:/usr/bin:/bin"
 Environment="vilona_PAPER_TRADING=true"
-ExecStart=/home/openclaw/projects/vilona-v2/.venv/bin/python3 app_server.py
+ExecStart=/home/openclaw/projects/vilona-ai/.venv/bin/python3 app_server.py
 Restart=always
 RestartSec=10
 StandardOutput=journal

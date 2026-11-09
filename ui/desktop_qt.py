@@ -5,20 +5,28 @@ scanner control, and Telegram integration.
 """
 
 import sys
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView,
-    QGroupBox, QGridLayout, QSplitter, QTextEdit, QStatusBar,
-    QSystemTrayIcon, QMenu, QStyle, QMessageBox
-)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QAction, QIcon, QColor, QPalette
+
+try:
+    from PyQt6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView,
+        QGroupBox, QGridLayout, QSplitter, QTextEdit, QStatusBar,
+        QSystemTrayIcon, QMenu, QStyle, QMessageBox
+    )
+    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+    from PyQt6.QtGui import QAction, QIcon, QColor, QPalette
+    PYQT6_AVAILABLE = True
+except ImportError:
+    PYQT6_AVAILABLE = False
 
 from config import get_config
 from core.state_db import StateDB
 from trading.bridge_ccxt import CCXTBridge
 from trading.bridge_mt5 import MT5Bridge
 
+
+if not PYQT6_AVAILABLE:
+    raise ImportError("PyQt6 is required for the desktop UI. Install with: pip install PyQt6")
 
 class DataRefreshWorker(QThread):
     """Background worker for data refresh"""

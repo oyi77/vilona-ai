@@ -54,6 +54,10 @@ class TradingConfig:
     max_daily_loss_pct: float = 3.0
     max_concurrent_positions: int = 5
     max_spread_pct: float = 0.1
+    min_confidence: float = 0.55
+    max_spread_pct_default: float = 0.15
+    sl_atr_mult: float = 1.5
+    tp_atr_mult: float = 3.0
     min_volume_usd: float = 100.0
     
     be_trigger_atr_mult: float = 1.5
@@ -151,7 +155,65 @@ class Config:
         config.systemone_api_key = os.getenv("vilona_SYSTEMONE_API_KEY", config.systemone_api_key)
         
         return config
+
+    def validate(self) -> List[str]:
+        """Validate configuration and return list of error strings."""
+        errors = []
+
+        if not self.paper_trading:
+            if self.exchange.name.lower() != 'mt5':
+                if not self.exchange.api_key:
+                    errors.append("paper_trading=False requires exchange.api_key")
+                if not self.exchange.api_secret:
+                    errors.append("paper_trading=False requires exchange.api_secret")
+            if not self.telegram.bot_token:
+                errors.append("telegram.bot_token must be non-empty")
+            if not self.telegram.chat_ids:
+                errors.append("telegram.chat_ids must be non-empty list")
+            if not self.llm.api_key:
+                errors.append("llm.api_key must be non-empty")
+
+        if not self.trading.symbols:
+            errors.append("trading.symbols must be non-empty")
+        if self.trading.max_risk_per_trade_pct <= 0 or self.trading.max_risk_per_trade_pct > 10:
+            errors.append("trading.max_risk_per_trade_pct must be > 0 and <= 10")
+        if self.trading.max_daily_loss_pct <= 0 or self.trading.max_daily_loss_pct > 50:
+            errors.append("trading.max_daily_loss_pct must be > 0 and <= 50")
+
+        if not self.enabled_personas:
+            errors.append("enabled_personas must be non-empty")
+
+        return errors
     
+    def to_dataclass(self) -> dict:
+        """Convert Config into a plain dict with typed values and stripped secrets."""
+        import copy
+        safe = copy.deepcopy(self)
+        # Strip secrets
+        safe.exchange.api_key = "***" if safe.exchange.api_key else ""
+        safe.exchange.api_secret = "***" if safe.exchange.api_secret else ""
+        safe.exchange.password = "***" if safe.exchange.password else ""
+        safe.telegram.bot_token = "***" if safe.telegram.bot_token else ""
+        safe.llm.api_key = "***" if safe.llm.api_key else ""
+        safe.systemone_api_key = "***" if safe.systemone_api_key else ""
+
+        # Flatten trading fields for direct consumption
+        d = copy.deepcopy(safe.trading.__dict__)
+        d["exchange"] = copy.deepcopy(safe.exchange.__dict__)
+        d["telegram"] = copy.deepcopy(safe.telegram.__dict__)
+        d["llm"] = copy.deepcopy(safe.llm.__dict__)
+        d["database"] = copy.deepcopy(safe.database.__dict__)
+        d["build"] = copy.deepcopy(safe.build.__dict__)
+        d["headless"] = safe.headless
+        d["paper_trading"] = safe.paper_trading
+        d["debug"] = safe.debug
+        d["log_level"] = safe.log_level
+        d["enabled_personas"] = list(safe.enabled_personas)
+        d["systemone_enabled"] = safe.systemone_enabled
+        d["systemone_endpoint"] = safe.systemone_endpoint
+        d["systemone_api_key"] = safe.systemone_api_key
+        return d
+
     def to_json(self) -> str:
         """Serialize config to JSON (excluding sensitive keys)"""
         import copy

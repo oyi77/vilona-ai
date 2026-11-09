@@ -5,10 +5,12 @@ Requires 'MetaTrader5' package and a running MT5 terminal.
 """
 from __future__ import annotations
 import time
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 
+logger = logging.getLogger(__name__)
 try:
     import MetaTrader5 as mt5
 except ImportError:
