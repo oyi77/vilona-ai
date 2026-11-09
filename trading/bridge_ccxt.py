@@ -5,9 +5,12 @@ Preserves the same trading logic (BE, Trailing, Drift Cancellation) from Vilona 
 """
 
 import time
+import logging
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Tuple
 import ccxt
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Tick:
@@ -42,10 +45,12 @@ class Position:
     symbol: str
     type: str
     price_open: float
-    sl: float = 0.0
-    tp: float = 0.0
-    volume: float = 0.0
+    sl: float
+    tp: float
+    volume: float
     profit: float = 0.0
+    price_current: float = 0.0
+    swap: float = 0.0
     magic: int = 0
     comment: str = ""
 
@@ -55,7 +60,9 @@ class Order:
     symbol: str
     type: str
     price_open: float
-    volume: float = 0.0
+    volume: float
+    sl: float = 0.0
+    tp: float = 0.0
     time_setup: int = 0
 
 class CCXTBridge:
@@ -68,6 +75,16 @@ class CCXTBridge:
         self._connected = False
         self._symbol_info_cache: Dict[str, SymbolInfo] = {}
         self._magic_numbers: Dict[str, int] = {}
+
+    def _classify_error(self, e):
+        """Classify ccxt error into 'transient', 'fatal', or 'unknown'."""
+        if isinstance(e, (ccxt.NetworkError, ccxt.RequestTimeout, ccxt.RateLimitExceeded,
+                          ccxt.DDoSProtection, ccxt.ExchangeNotAvailable)):
+            return 'transient'
+        elif isinstance(e, (ccxt.AuthenticationError, ccxt.PermissionDenied,
+                            ccxt.InvalidOrder, ccxt.InsufficientFunds)):
+            return 'fatal'
+        return 'unknown'
 
     def connect(self) -> bool:
         try:
@@ -92,7 +109,7 @@ class CCXTBridge:
             return True
 
         except Exception as e:
-            print(f"[CCXTBridge] Connection failed: {e}")
+            logger.error(f"[CCXTBridge] Connection failed: {e}")
             return False
 
     def is_connected(self) -> bool:
@@ -121,7 +138,14 @@ class CCXTBridge:
             return info
 
         except Exception as e:
-            print(f"[CCXTBridge] Error fetching symbol info for {symbol}: {e}")
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                logger.warning(f"[CCXTBridge] Error fetching symbol info for {symbol}: {e}")
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Error fetching symbol info for {symbol}: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Error fetching symbol info for {symbol}: {e}")
             return None
 
     def get_tick(self, symbol: str) -> Optional[Tick]:
@@ -143,7 +167,14 @@ class CCXTBridge:
             )
 
         except Exception as e:
-            print(f"[CCXTBridge] Error fetching tick for {symbol}: {e}")
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                logger.warning(f"[CCXTBridge] Error fetching tick for {symbol}: {e}")
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Error fetching tick for {symbol}: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Error fetching tick for {symbol}: {e}")
             return None
 
     def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
@@ -169,7 +200,14 @@ class CCXTBridge:
                     ))
 
         except Exception as e:
-            print(f"[CCXTBridge] Error fetching positions: {e}")
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                logger.warning(f"[CCXTBridge] Error fetching positions: {e}")
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Error fetching positions: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Error fetching positions: {e}")
 
         return positions
 
@@ -208,7 +246,14 @@ class CCXTBridge:
                 ))
 
         except Exception as e:
-            print(f"[CCXTBridge] Error fetching pending orders: {e}")
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                logger.warning(f"[CCXTBridge] Error fetching pending orders: {e}")
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Error fetching pending orders: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Error fetching pending orders: {e}")
 
         return orders
 
@@ -229,7 +274,14 @@ class CCXTBridge:
             } for c in ohlcv]
 
         except Exception as e:
-            print(f"[CCXTBridge] Error fetching candles: {e}")
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                logger.warning(f"[CCXTBridge] Error fetching candles: {e}")
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Error fetching candles: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Error fetching candles: {e}")
             return None
 
     def send_market_order(self, symbol: str, action: str, volume: float,
@@ -273,7 +325,15 @@ class CCXTBridge:
             return True, "Order placed", ticket
 
         except Exception as e:
-            return False, str(e), None
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                return False, str(e), None
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Order failed fatal: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Order failed unknown: {e}")
+                return False, str(e), None
 
     def modify_position_sltp(self, ticket: int, symbol: str,
                              sl: Optional[float] = None, tp: Optional[float] = None) -> Tuple[bool, str]:
@@ -318,7 +378,15 @@ class CCXTBridge:
                     return False, f"Failed to reopen: {msg}"
 
         except Exception as e:
-            return False, str(e)
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                return False, str(e)
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Modify SL/TP fatal: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Modify SL/TP unknown: {e}")
+                return False, str(e)
 
     def close_position(self, ticket: int, symbol: str) -> Tuple[bool, str]:
         try:
@@ -354,7 +422,15 @@ class CCXTBridge:
                     return False, "Close order failed"
 
         except Exception as e:
-            return False, str(e)
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                return False, str(e)
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Close position fatal: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Close position unknown: {e}")
+                return False, str(e)
 
     def cancel_order(self, ticket: int, symbol: str) -> Tuple[bool, str]:
         try:
@@ -369,7 +445,15 @@ class CCXTBridge:
                 return False, "Cancel failed"
 
         except Exception as e:
-            return False, str(e)
+            classification = self._classify_error(e)
+            if classification == 'transient':
+                return False, str(e)
+            elif classification == 'fatal':
+                logger.error(f"[CCXTBridge] Cancel order fatal: {e}")
+                raise
+            else:
+                logger.error(f"[CCXTBridge] Cancel order unknown: {e}")
+                return False, str(e)
 
     def cancel_all_orders(self, symbol: str) -> int:
         try:
@@ -387,7 +471,7 @@ class CCXTBridge:
             return cancelled
 
         except Exception as e:
-            print(f"[CCXTBridge] Error cancelling orders: {e}")
+            logger.error(f"[CCXTBridge] Error cancelling orders: {e}")
             return 0
 
     def calculate_daily_pl(self, symbol: str) -> Tuple[float, int, int]:
@@ -423,7 +507,7 @@ class CCXTBridge:
             return pl, wins, total_closed
 
         except Exception as e:
-            print(f"[CCXTBridge] Error calculating daily PL: {e}")
+            logger.error(f"[CCXTBridge] Error calculating daily PL: {e}")
             return 0.0, 0, 0
 
     def get_server_time(self, symbol: str) -> int:
