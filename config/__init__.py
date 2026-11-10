@@ -54,6 +54,11 @@ class TradingConfig:
     max_daily_loss_pct: float = 3.0
     max_concurrent_positions: int = 5
     max_spread_pct: float = 0.1
+    min_confidence: float = 0.55
+    max_spread_pct_default: float = 0.15
+    sl_atr_mult: float = 1.5
+    tp_atr_mult: float = 3.0
+    
     min_volume_usd: float = 100.0
     
     be_trigger_atr_mult: float = 1.5
@@ -168,6 +173,68 @@ class Config:
         """Save config to JSON file"""
         with open(path, 'w') as f:
             f.write(self.to_json())
+    
+    def validate(self) -> List[str]:
+        """Validate configuration and return list of errors"""
+        errors = []
+        
+        # Exchange validation
+        if self.exchange.name not in ["ccxt", "mt5"]:
+            errors.append(f"Invalid exchange: {self.exchange.name}. Must be 'ccxt' or 'mt5'")
+        
+        if self.exchange.api_key and not self.exchange.api_secret:
+            errors.append("Exchange api_secret required when api_key is set")
+        
+        # Telegram validation
+        if self.telegram.enabled and not self.telegram.bot_token:
+            errors.append("Telegram bot_token required when enabled")
+        
+        if self.telegram.enabled and not self.telegram.chat_id:
+            errors.append("Telegram chat_id required when enabled")
+        
+        # LLM validation
+        if self.llm.enabled and not self.llm.api_key:
+            errors.append("LLM api_key required when enabled")
+        
+        # Trading validation
+        if self.trading.max_risk_per_trade_pct <= 0 or self.trading.max_risk_per_trade_pct > 100:
+            errors.append("max_risk_per_trade_pct must be > 0 and <= 100")
+        
+        if self.trading.max_daily_loss_pct <= 0 or self.trading.max_daily_loss_pct > 100:
+            errors.append("max_daily_loss_pct must be > 0 and <= 100")
+        
+        if self.trading.max_concurrent_positions <= 0:
+            errors.append("max_concurrent_positions must be > 0")
+        
+        if self.trading.max_spread_pct <= 0:
+            errors.append("max_spread_pct must be > 0")
+        
+        if self.trading.min_confidence <= 0 or self.trading.min_confidence > 1:
+            errors.append("min_confidence must be > 0 and <= 1")
+        
+        if self.trading.max_spread_pct_default <= 0:
+            errors.append("max_spread_pct_default must be > 0")
+        
+        if self.trading.sl_atr_mult <= 0:
+            errors.append("sl_atr_mult must be > 0")
+        
+        if self.trading.tp_atr_mult <= 0:
+            errors.append("tp_atr_mult must be > 0")
+        
+        if self.trading.min_volume_usd < 0:
+            errors.append("min_volume_usd must be >= 0")
+        
+        if self.trading.trailing_atr_mult <= 0:
+            errors.append("trailing_atr_mult must be > 0")
+        
+        if self.trading.trailing_step_atr_mult <= 0:
+            errors.append("trailing_step_atr_mult must be > 0")
+        
+        # Database validation
+        if not self.database.path:
+            errors.append("database.path cannot be empty")
+        
+        return errors
 
 
 _config: Optional[Config] = None
