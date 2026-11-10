@@ -97,7 +97,7 @@ class CCXTBridge:
                 'enableRateLimit': True,
                 'rateLimit': self.exchange_config.rate_limit,
                 'options': {
-                    'defaultType': 'spot',
+                    'defaultType': self.exchange_config.market_type,
                 }
             })
 
@@ -374,6 +374,8 @@ class CCXTBridge:
                 else:
                     return True, "No SL/TP changes"
             else:
+                if getattr(self.exchange_config, 'market_type', 'spot') == 'spot':
+                    return False, "SL/TP modification is not supported for spot positions by this adapter"
                 positions = self.get_positions(symbol)
                 target_pos = next((p for p in positions if p.ticket == ticket), None)
                 if not target_pos:
@@ -414,6 +416,8 @@ class CCXTBridge:
             if not target_pos:
                 return False, f"Position {ticket} not found for {symbol}"
 
+            if getattr(self.exchange_config, 'market_type', 'spot') == 'spot':
+                return False, "position close is not supported for spot accounts by this position adapter"
             if hasattr(self._exchange, 'cancel_all_orders'):
                 result = self._exchange.cancel_all_orders(symbol)
                 return True, "Futures position closed"

@@ -23,6 +23,10 @@ class StateDB:
         with self._lock:
             self._conn = sqlite3.connect(self.path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA foreign_keys=ON")
+            if self.path != ':memory:':
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
 
     def _ensure_tables(self):
         with self._lock:
@@ -91,6 +95,16 @@ class StateDB:
                     started INTEGER NOT NULL DEFAULT 0,
                     last_sl REAL
                 );
+                CREATE TABLE IF NOT EXISTS runtime_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    kind TEXT NOT NULL,
+                    symbol TEXT NOT NULL DEFAULT '',
+                    correlation_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_runtime_events_created
+                    ON runtime_events(created_at DESC);
             """)
             self._conn.commit()
 
@@ -203,6 +217,33 @@ class StateDB:
                 (key, value)
             )
             self._conn.commit()
+
+    def record_event(self, event: Any) -> int:
+        """Append a runtime event and return its database id."""
+        with self._lock:
+            cursor = self._conn.execute(
+                """INSERT INTO runtime_events
+                   (kind, symbol, correlation_id, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (event.kind, event.symbol, event.correlation_id, event.json(), event.created_at),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
+    def get_events(self, limit: int = 100, kind: Optional[str] = None) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit), 1000))
+        with self._lock:
+            if kind:
+                rows = self._conn.execute(
+                    "SELECT * FROM runtime_events WHERE kind=? ORDER BY created_at DESC LIMIT ?",
+                    (kind, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM runtime_events ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [dict(row) for row in rows]
 
     def close(self):
         with self._lock:

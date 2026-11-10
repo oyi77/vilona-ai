@@ -19,6 +19,7 @@ class ExchangeConfig:
     password: str = ""
     sandbox: bool = False
     rate_limit: int = 1200
+    market_type: str = "spot"
 
 
 @dataclass
@@ -69,6 +70,7 @@ class TradingConfig:
     max_drift_candles: int = 12
     drift_timeframe: str = "15m"
     paper_trading: bool = True
+    max_data_age_seconds: int = 120
 
 
 @dataclass
@@ -96,6 +98,8 @@ class Config:
     
     headless: bool = True
     paper_trading: bool = True
+    autonomy_enabled: bool = False
+    emergency_stop_file: str = "vilona.emergency_stop"
     debug: bool = False
     log_level: str = "INFO"
     
@@ -115,6 +119,7 @@ class Config:
         config.exchange.api_secret = os.getenv("vilona_EXCHANGE_API_SECRET", config.exchange.api_secret)
         config.exchange.password = os.getenv("vilona_EXCHANGE_PASSWORD", config.exchange.password)
         config.exchange.sandbox = os.getenv("vilona_EXCHANGE_SANDBOX", "false").lower() == "true"
+        config.exchange.market_type = os.getenv("vilona_EXCHANGE_MARKET_TYPE", config.exchange.market_type)
         
         config.telegram.bot_token = os.getenv("vilona_TELEGRAM_BOT_TOKEN", config.telegram.bot_token)
         chat_ids_str = os.getenv("vilona_TELEGRAM_CHAT_IDS", "")
@@ -141,10 +146,13 @@ class Config:
         config.trading.scan_interval = int(os.getenv("vilona_SCAN_INTERVAL", str(config.trading.scan_interval)))
         config.trading.max_risk_per_trade_pct = float(os.getenv("vilona_MAX_RISK_PCT", str(config.trading.max_risk_per_trade_pct)))
         config.trading.max_daily_loss_pct = float(os.getenv("vilona_MAX_DAILY_LOSS_PCT", str(config.trading.max_daily_loss_pct)))
+        config.trading.max_data_age_seconds = int(os.getenv("vilona_MAX_DATA_AGE_SECONDS", str(config.trading.max_data_age_seconds)))
         config.paper_trading = os.getenv("vilona_PAPER_TRADING", "true").lower() == "true"
         config.trading.paper_trading = config.paper_trading
         
         config.headless = os.getenv("vilona_HEADLESS", "true").lower() == "true"
+        config.autonomy_enabled = os.getenv("vilona_AUTONOMY_ENABLED", "false").lower() == "true"
+        config.emergency_stop_file = os.getenv("vilona_EMERGENCY_STOP_FILE", config.emergency_stop_file)
         config.debug = os.getenv("vilona_DEBUG", "false").lower() == "true"
         config.log_level = os.getenv("vilona_LOG_LEVEL", config.log_level)
         
@@ -190,6 +198,10 @@ class Config:
             errors.append("trading.scan_interval must be greater than 0")
         if self.telegram.admin_chat_ids and not set(self.telegram.admin_chat_ids).issubset(self.telegram.chat_ids):
             errors.append("telegram.admin_chat_ids must be a subset of telegram.chat_ids")
+        if self.trading.max_data_age_seconds <= 0:
+            errors.append("trading.max_data_age_seconds must be greater than 0")
+        if self.exchange.market_type not in {"spot", "margin", "swap", "future"}:
+            errors.append("exchange.market_type must be spot, margin, swap, or future")
 
         return errors
     

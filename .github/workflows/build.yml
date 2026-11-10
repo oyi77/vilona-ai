@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install Nuitka
-        run: pip install nuitka
+        run: pip install -r requirements-build.txt
       - name: Build Windows Executable
         run: python scripts/build.py windows
       - name: Upload Artifact
@@ -43,7 +43,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install Nuitka
-        run: pip install nuitka
+        run: pip install -r requirements-build.txt
       - name: Install patchelf
         run: sudo apt-get update && sudo apt-get install -y patchelf
       - name: Build Linux Executable
@@ -62,7 +62,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install Nuitka
-        run: pip install nuitka
+        run: pip install -r requirements-build.txt
       - name: Build macOS Executable
         run: python scripts/build.py macos
       - name: Upload Artifact
