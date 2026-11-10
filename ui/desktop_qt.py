@@ -5,14 +5,19 @@ scanner control, and Telegram integration.
 """
 
 import sys
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView,
-    QGroupBox, QGridLayout, QSplitter, QTextEdit, QStatusBar,
-    QSystemTrayIcon, QMenu, QStyle, QMessageBox
-)
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
-from PyQt6.QtGui import QAction, QIcon, QColor, QPalette
+
+try:
+    from PyQt6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView,
+        QGroupBox, QGridLayout, QSplitter, QTextEdit, QStatusBar,
+        QSystemTrayIcon, QMenu, QStyle, QMessageBox
+    )
+    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+    from PyQt6.QtGui import QAction, QIcon, QColor, QPalette
+    PYQT6_AVAILABLE = True
+except ImportError:
+    PYQT6_AVAILABLE = False
 
 from config import get_config
 from core.state_db import StateDB
