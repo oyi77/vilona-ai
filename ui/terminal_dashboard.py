@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import time
 import logging
 from typing import Any, List, Dict
@@ -68,9 +69,12 @@ class TerminalDashboard:
 
     def _get_footer(self) -> Panel:
         uptime = "Calculating..."
-        # Simplified uptime
-        pos_count = len(self.bridge.get_positions()) if hasattr(self.bridge, 'get_positions') else 0
-        
+        # Guard bridge calls — fatal errors (missing API key) must not crash the thread
+        try:
+            pos_count = len(self.bridge.get_positions()) if hasattr(self.bridge, 'get_positions') else 0
+        except Exception:
+            pos_count = 0
+
         content = Text(
             f"Uptime: {int(time.time() - self._stats_start)}s | "
             f"Positions: {pos_count} | "
@@ -80,9 +84,14 @@ class TerminalDashboard:
         return Panel(Align.center(content), border_style="dim")
 
     def start(self):
+        # Skip live display in headless or non-TTY mode
+        if not sys.stdout.isatty() or getattr(self.config, 'headless', False):
+            logger.warning("Terminal dashboard: non-TTY or headless mode, skipping live display")
+            self.running = False
+            return
         self._stats_start = time.time()
         self.running = True
-        
+
         layout = Layout()
         layout.split_column(
             Layout(name="header", size=3),

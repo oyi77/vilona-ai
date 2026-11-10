@@ -45,6 +45,10 @@ if not logger.handlers:
 
 shutdown_event = threading.Event()
 
+def _signal_handler(signum, frame):
+    logger.info(f"Signal {signum} received - shutting down")
+    shutdown_event.set()
+
 
 def main():
     cfg = get_config()
@@ -74,51 +78,68 @@ def main():
     # 2. Initialize UI Layers
     tg_controller = TelegramController(bridge)
 
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+    # Headless/paper mode: UI failures are non-fatal. Only set shutdown_event
+    # if a UI thread actually started and then crashed unexpectedly.
+    # A UI skipped due to missing config must not kill the process.
+    tg_thread = None
+    if cfg.telegram.bot_token:
+        def run_tg():
+            try:
+                tg_controller.start()
+            except Exception as e:
+                logger.error(f"Telegram Bot thread crashed: {e}")
+                shutdown_event.set()
+
+        tg_thread = threading.Thread(target=run_tg, daemon=True)
+        tg_thread.start()
+    else:
+        logger.info("Telegram bot token not configured — skipping Telegram thread")
+
     tray_app = None
     if sys.platform == 'win32' and not cfg.headless:
         tray_app = SystemTrayApp(bridge, cfg, tg_controller)
         tray_app.start()
 
-    # Terminal Dashboard & Telegram Threads
-    def run_tg():
-        try:
-            tg_controller.start()
-        except Exception as e:
-            logger.error(f"Telegram Bot thread crashed: {e}")
-            shutdown_event.set()
-
-    tg_thread = threading.Thread(target=run_tg, daemon=True)
-    tg_thread.start()
-
     dash = TerminalDashboard(bridge, cfg)
 
-    def run_dash():
-        try:
-            dash.start()
-        except Exception as e:
-            logger.error(f"Dashboard thread crashed: {e}")
-            shutdown_event.set()
+    dash_thread = None
+    if sys.stdout.isatty() and not cfg.headless:
+        def run_dash():
+            try:
+                dash.start()
+            except Exception as e:
+                logger.error(f"Dashboard thread crashed: {e}")
+                shutdown_event.set()
 
-    dash_thread = threading.Thread(target=run_dash, daemon=True)
-    dash_thread.start()
+        dash_thread = threading.Thread(target=run_dash, daemon=True)
+        dash_thread.start()
+    else:
+        logger.info("Terminal dashboard: non-TTY or headless — skipping dashboard thread")
 
+    # Main loop — idle heartbeat every 60s when nothing to do
+    heartbeat_counter = 0
     try:
-        # Wait on shutdown_event or KeyboardInterrupt/signals
         while not shutdown_event.is_set():
             shutdown_event.wait(timeout=1.0)
+            heartbeat_counter += 1
+            if heartbeat_counter >= 60:
+                heartbeat_counter = 0
+                logger.info("Heartbeat: process alive, waiting for shutdown...")
     except (KeyboardInterrupt, SystemExit):
         logger.info("Shutdown signal received")
         shutdown_event.set()
     finally:
         # Clean shutdown sequence
         logger.info("Initiating clean shutdown...")
-        if hasattr(dash, 'stop'):
+        if dash_thread and dash.running:
             try:
                 dash.stop()
             except Exception as e:
                 logger.error(f"Error stopping dashboard: {e}")
 
-        if hasattr(tg_controller, 'stop'):
+        if tg_thread and tg_controller.running:
             try:
                 tg_controller.stop()
             except Exception as e:
