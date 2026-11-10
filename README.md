@@ -8,6 +8,7 @@ Vilona AI is a Python trading-control service for crypto exchanges supported by 
 
 - CCXT and MetaTrader 5 bridges for market data, positions, orders, SL/TP, cancellation, balances, and daily P&L.
 - Telegram views for status, balance, controls, and recent logs. Start/stop/restart and close-all are admin-only; close-all uses an explicit confirmation step.
+- Telegram commands for `/health`, persisted `/events`, `/start_scan`, `/stop_scan`, `/restart_scan`, immediate `/emergency_stop`, and confirmed `/emergency_reset`. Destructive callbacks are chat-bound, single-use, and expire after 30 seconds.
 - Rich terminal monitoring with paper/live mode, exchange name, daily P&L, open-position count, and colored activity logs.
 - Risk helpers for confidence, spread, position count, daily loss, ATR-derived SL/TP, position sizing, break-even, trailing stops, and drift cancellation.
 - Optional researcher, trader, risk-manager, and judge prompt/parser modules, plus an async LLM client.

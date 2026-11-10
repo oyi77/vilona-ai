@@ -16,11 +16,17 @@ The persistent menu contains four views:
 - **Status** shows open positions, daily P&L, win/total count, and up to ten open trades.
 - **Balance** uses the bridge’s normalized `get_balance()` API. CCXT returns the configured USDT total/free wallet values. MT5 returns balance, equity, margin, and free margin.
 - **Control** shows paper/live mode and the configured exchange. Start, stop, and restart are admin-only state controls.
+- **Health** shows runtime state, bridge/database/LLM health, uptime, error count, last scan age, and emergency-latch state.
+- **Events** shows recent append-only SQLite runtime events.
 - **Logs** shows the controller’s in-memory recent log list. It is not a historical SQLite log viewer.
 
 Viewer access comes from `vilona_TELEGRAM_CHAT_IDS`. Admin access comes from `vilona_TELEGRAM_ADMIN_IDS`. The admin list must be a subset of the viewer list. An empty list fails closed. Close-all requires an admin and two actions: request confirmation, then select “Yes, close all”. The confirmation handler calls `bridge.close_position()` for each position and reports partial failures.
 
 Telegram MarkdownV2 formatting is escaped through `ui.prompts.escape_md_v2`. When adding a new view, keep all user-controlled symbols, reasons, and error messages escaped before interpolation.
+
+### Command matrix
+
+Viewer commands are `/status`, `/health`, `/events [count]`, `/balance`, `/control`, `/logs`, and `/help`. Admin commands are `/start_scan`, `/stop_scan`, `/restart_scan`, `/emergency_stop [reason]`, and `/emergency_reset`. Emergency stop is intentionally immediate; reset is confirmation-gated and never starts the runtime. Control and destructive callbacks are bound to the requesting chat, single-use, and expire after 30 seconds.
 
 ## Terminal dashboard
 

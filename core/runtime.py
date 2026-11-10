@@ -107,6 +107,9 @@ class RuntimeSupervisor:
             self._thread = threading.Thread(target=self._run_thread, name="vilona-runtime", daemon=True)
             self._thread.start()
             self.health.state = "running"
+            self.health.started_at = time.time()
+            self.health.emergency_latched = False
+            self.health.emergency_file_present = False
             self._event("runtime_started", payload={"paper": self.execution.paper})
             return True
 
@@ -128,12 +131,16 @@ class RuntimeSupervisor:
             self._emergency_stop = True
             self.health.state = "emergency_stopped"
             self.health.last_error = reason
+            self.health.emergency_latched = True
+            self.health.emergency_file_present = Path(self.config.emergency_stop_file).exists()
         self._stop_event.set()
         self._event("emergency_stop", payload={"reason": reason})
 
     def reset_emergency_stop(self) -> None:
         with self._lock:
             self._emergency_stop = False
+            self.health.emergency_latched = False
+            self.health.emergency_file_present = False
             if self.health.state == "emergency_stopped":
                 self.health.state = "stopped"
 
@@ -149,6 +156,7 @@ class RuntimeSupervisor:
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set() and not self._emergency_stop:
             if Path(self.config.emergency_stop_file).exists():
+                self.health.emergency_file_present = True
                 self.emergency_stop("emergency-stop file detected")
                 break
             started = time.monotonic()
