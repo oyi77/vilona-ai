@@ -60,7 +60,13 @@ def main():
         else:
             bridge = CCXTBridge(cfg.exchange)
 
-        if not bridge.connect():
+        connected = bridge.connect()
+        # MT5 returns (success, message), while CCXT returns bool.
+        if isinstance(connected, tuple):
+            connected, message = connected
+            if message:
+                logger.info(message)
+        if not connected:
             logger.error("Critical: Bridge connection failed")
             return 1
     except Exception as e:
