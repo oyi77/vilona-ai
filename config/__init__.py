@@ -179,24 +179,32 @@ class Config:
         errors = []
         
         # Exchange validation
-        if self.exchange.name not in ["ccxt", "mt5"]:
-            errors.append(f"Invalid exchange: {self.exchange.name}. Must be 'ccxt' or 'mt5'")
+        if not self.exchange.name:
+            errors.append("Exchange name cannot be empty")
         
         if self.exchange.api_key and not self.exchange.api_secret:
             errors.append("Exchange api_secret required when api_key is set")
         
-        # Telegram validation
-        if self.telegram.enabled and not self.telegram.bot_token:
-            errors.append("Telegram bot_token required when enabled")
+        # Telegram validation (live mode only)
+        if not self.paper_trading:
+            if not self.telegram.bot_token:
+                errors.append("Telegram bot_token required")
+            
+            if not self.telegram.chat_ids:
+                errors.append("Telegram chat_id required")
+            
+            # LLM validation (live mode only)
+            if not self.llm.api_key:
+                errors.append("LLM api_key required")
+            
+            # Live mode exchange: require api_key + api_secret if not mt5
+            if self.exchange.name.lower() != "mt5":
+                if not self.exchange.api_key:
+                    errors.append("Exchange api_key required for live trading")
+                if not self.exchange.api_secret:
+                    errors.append("Exchange api_secret required for live trading")
         
-        if self.telegram.enabled and not self.telegram.chat_id:
-            errors.append("Telegram chat_id required when enabled")
-        
-        # LLM validation
-        if self.llm.enabled and not self.llm.api_key:
-            errors.append("LLM api_key required when enabled")
-        
-        # Trading validation
+        # Numeric range checks (unconditional)
         if self.trading.max_risk_per_trade_pct <= 0 or self.trading.max_risk_per_trade_pct > 100:
             errors.append("max_risk_per_trade_pct must be > 0 and <= 100")
         
@@ -236,6 +244,30 @@ class Config:
         
         return errors
 
+    
+    def validate_extended(self) -> List[str]:
+        """Additional validate() contract for risk_manager and test_integration"""
+        errors = []
+        if not self.paper_trading and self.exchange.name != "mt5":
+            if not self.exchange.api_key or not self.exchange.api_secret:
+                errors.append("exchange api_key/api_secret required when paper_trading=False and exchange != mt5")
+        if not self.telegram.bot_token:
+            errors.append("telegram.bot_token is required")
+        if not self.telegram.chat_ids:
+            errors.append("telegram.chat_ids is required")
+        if not self.trading.symbols:
+            errors.append("trading.symbols is required")
+        if not (0 < self.trading.max_risk_per_trade_pct <= 10):
+            errors.append("max_risk_per_trade_pct must > 0 <= 10")
+        if not (0 < self.trading.max_daily_loss_pct <= 50):
+            errors.append("max_daily_loss_pct must > 0 <= 50")
+        if not (0 <= self.trading.min_confidence <= 1):
+            errors.append("min_confidence must be 0 <= value <= 1")
+        if self.trading.scan_interval <= 0:
+            errors.append("scan_interval must be > 0")
+        if self.telegram.admin_chat_ids and not set(self.telegram.admin_chat_ids).issubset(set(self.telegram.chat_ids)):
+            errors.append("telegram.admin_chat_ids must be a subset of telegram.chat_ids")
+        return errors
 
 _config: Optional[Config] = None
 
