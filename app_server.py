@@ -12,7 +12,14 @@ from trading.bridge_ccxt import CCXTBridge
 from trading.bridge_mt5 import MT5Bridge
 from ui.telegram_controller import TelegramController
 from ui.terminal_dashboard import TerminalDashboard
-from ui.system_tray import SystemTrayApp
+try:
+    from ui.system_tray import SystemTrayApp
+except ImportError:
+    SystemTrayApp = None
+from core.runtime import RuntimeSupervisor
+from core.state_db import StateDB
+from llm.client import get_llm_client
+from core.runtime import LLMTradingProvider
 
 logger = logging.getLogger('vilona-ai')
 
@@ -74,10 +81,20 @@ def main():
         return 1
 
     # 2. Initialize UI Layers
-    tg_controller = TelegramController(bridge)
+    signal_provider = None
+    judge_client = None
+    if cfg.llm.api_key:
+        llm_client = get_llm_client()
+        signal_provider = LLMTradingProvider(llm_client)
+        if "judge" in cfg.enabled_personas:
+            judge_client = llm_client
+    runtime = RuntimeSupervisor(bridge, cfg, state_db=StateDB(), signal_provider=signal_provider, judge_client=judge_client)
+    tg_controller = TelegramController(bridge, runtime=runtime)
+    if cfg.autonomy_enabled:
+        runtime.start()
 
     tray_app = None
-    if sys.platform == 'win32' and not cfg.headless:
+    if sys.platform == 'win32' and not cfg.headless and SystemTrayApp is not None:
         tray_app = SystemTrayApp(bridge, cfg, tg_controller)
         tray_app.start()
 
@@ -92,7 +109,7 @@ def main():
     tg_thread = threading.Thread(target=run_tg, daemon=True)
     tg_thread.start()
 
-    dash = TerminalDashboard(bridge, cfg)
+    dash = TerminalDashboard(bridge, cfg, runtime=runtime)
 
     def run_dash():
         try:
@@ -125,6 +142,11 @@ def main():
                 tg_controller.stop()
             except Exception as e:
                 logger.error(f"Error stopping Telegram: {e}")
+
+        try:
+            runtime.stop()
+        except Exception as e:
+            logger.error(f"Error stopping runtime: {e}")
 
         if bridge and hasattr(bridge, 'disconnect'):
             try:

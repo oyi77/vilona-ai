@@ -12,10 +12,12 @@ Vilona AI is a Python trading-control service for crypto exchanges supported by 
 - Risk helpers for confidence, spread, position count, daily loss, ATR-derived SL/TP, position sizing, break-even, trailing stops, and drift cancellation.
 - Optional researcher, trader, risk-manager, and judge prompt/parser modules, plus an async LLM client.
 - SQLite persistence and Docker, systemd, shell-runner, and Nuitka build support.
+- Paper-first `RuntimeSupervisor` with cancellable scans, stale-data rejection, risk gating, event recording, health state, and an emergency-stop file.
+- Explicit paper/live execution adapters. Paper mode never calls a broker order method.
 
-## Important current limitation
+## Runtime boundary
 
-The repository contains building blocks for autonomous scanning and proactive alerts, but the default `app_server.py` only connects the bridge and starts the UIs. It does not yet orchestrate candle collection → LLM signal → risk gate → judge → order execution on a recurring scan interval. Treat automatic trading, scheduled daily reports, and live AI alerts as planned capability until that engine is implemented and tested end to end.
+`RuntimeSupervisor` now orchestrates candle collection → signal provider → risk gate → optional judge → paper/live execution on a recurring interval. It is stopped by default; enable it with `vilona_AUTONOMY_ENABLED=true`. Without an LLM key or injected provider, the safe signal is `WAIT`. Daily reports, proactive alerts, and production-grade broker reconciliation remain separate follow-up work.
 
 ## Quick start
 
@@ -41,6 +43,8 @@ python app_server.py
 
 Live mode requires exchange credentials, Telegram credentials and authorized chat IDs, and an LLM key according to `Config.validate()`. Keep `vilona_EXCHANGE_SANDBOX=true` while testing an exchange API integration.
 
+For smaller deployments, install `requirements-core.txt` for headless operation. Add `requirements-mt5.txt`, `requirements-desktop.txt`, or `requirements-build.txt` only when those capabilities are needed. Autonomous scanning remains opt-in with `vilona_AUTONOMY_ENABLED=true`.
+
 ## Configuration and access control
 
 `.env.example` is the canonical variable list. All variables use the lowercase `vilona_` prefix. `vilona_TELEGRAM_CHAT_IDS` is the viewer allow-list. `vilona_TELEGRAM_ADMIN_IDS` must be a subset of that list and controls scanner actions and close-all. An empty list denies Telegram access rather than implicitly authorizing a user.
@@ -61,6 +65,10 @@ ui/telegram_controller.py     Telegram command center
 ui/terminal_dashboard.py      Rich terminal dashboard
 ui/system_tray.py             Optional Windows tray integration
 core/state_db.py              Thread-safe SQLite persistence
+core/runtime.py               Cancellable scan/execution supervisor
+trading/execution.py          Paper/live execution ports and adapters
+core/events.py                Append-only runtime event model
+core/health.py                Runtime health snapshots
 tests/                        Offline smoke and integration tests
 docs/                         UX and operations notes
 ```

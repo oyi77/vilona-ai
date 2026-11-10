@@ -5,9 +5,9 @@
 
 ## Product boundary
 
-Vilona AI currently exposes monitoring and control surfaces around exchange bridges. `app_server.py` connects one bridge, starts the Telegram controller when a bot token is configured, and starts the Rich terminal dashboard. It does not currently run an autonomous recurring scan loop or submit signals produced by the agent modules.
+Vilona AI exposes monitoring and control surfaces around exchange bridges and now includes a lifecycle-owned `RuntimeSupervisor`. `app_server.py` connects one bridge, creates paper or live execution through an explicit adapter, starts the Telegram controller when a bot token is configured, and starts the Rich terminal dashboard. Autonomous scanning is opt-in and remains disabled by default.
 
-The UI must therefore describe the service as a control and observability layer until the scan/execution orchestrator is added. In particular, “AI trade alerts”, “daily reports”, and “automatic trading” are not delivered by the current server lifecycle.
+The UI must distinguish stopped, running, degraded, and emergency-stopped runtime states. A missing signal provider produces `WAIT`; stale ticks produce a fault rather than an order. Paper execution never calls a broker order method.
 
 ## Telegram command center
 
@@ -26,15 +26,15 @@ Telegram MarkdownV2 formatting is escaped through `ui.prompts.escape_md_v2`. Whe
 
 The dashboard is intentionally lightweight and uses Rich rather than a GUI toolkit. Its header shows the configured paper/live mode and exchange and reads daily P&L through the shared `calculate_daily_pl(symbol)` bridge method. Its footer shows uptime, open-position count, and mode. Activity logs are in-memory and capped at 50 entries.
 
-The dashboard is a display surface only. Start/stop controls in Telegram currently change controller state; they do not start or stop an autonomous scanner because no scanner loop is wired into `app_server.py` yet.
+The dashboard observes the shared runtime state. Telegram Start and Stop call the supervisor, while Close All remains a separate admin-confirmed action.
 
 ## Desktop tray
 
 `ui/system_tray.py` is an optional Windows presence layer using `pystray` and Pillow. The current tray callbacks update local status, open Telegram, show a position count, and emit best-effort notifications. They are not a second execution engine. PyQt6 is a separate desktop panel and is not started by `app_server.py`.
 
-## Planned next capability: scan and execution service
+## Runtime and execution service
 
-The next high-value addition is a single explicit orchestrator with these boundaries:
+The supervisor implements these boundaries:
 
 1. Fetch tick and candles for one symbol and configured timeframes.
 2. Build a `MarketSnapshot` and optionally call researcher/trader LLM roles.
@@ -45,7 +45,7 @@ The next high-value addition is a single explicit orchestrator with these bounda
 7. Run break-even, trailing, and drift-cancellation maintenance separately from signal generation.
 8. Publish alert messages only after an observed order/persistence result.
 
-This should be implemented as a lifecycle-owned service with cancellation, bounded timeouts, per-symbol isolation, and a clear dry-run result. The Telegram “Start” button should control that service rather than only changing a UI boolean.
+Each scan is idempotency-keyed by symbol and scan bucket. Decisions and execution outcomes are appended to SQLite runtime events. `vilona_EMERGENCY_STOP_FILE` causes the supervisor to enter `emergency_stopped`; remove the file and explicitly reset the runtime before restarting. Live CCXT spot position close and synthetic SL/TP emulation are rejected by the adapter rather than silently approximated.
 
 ## Configuration source of truth
 

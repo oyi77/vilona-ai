@@ -18,9 +18,10 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 class TerminalDashboard:
-    def __init__(self, bridge: Any, config: Any):
+    def __init__(self, bridge: Any, config: Any, runtime: Any = None):
         self.bridge = bridge
         self.config = config
+        self.runtime = runtime
         self.running = False
         self._last_update = 0
         self._logs: List[str] = []
@@ -34,6 +35,7 @@ class TerminalDashboard:
     def _get_header(self) -> Panel:
         mode = "LIVE" if not self.config.paper_trading else "PAPER"
         exchange = self.config.exchange.name.upper()
+        runtime_state = self.runtime.status().get("state", "ui-only") if self.runtime else "ui-only"
         
         # Try to get current P/L if available
         try:
@@ -45,7 +47,7 @@ class TerminalDashboard:
             pnl_text = "P/L: ---"
 
         title = Text("🤖 Vilona AI v2", style="bold magenta")
-        content = Text(f" {mode} | {exchange} | Status: RUNNING | {pnl_text} ", style="white")
+        content = Text(f" {mode} | {exchange} | Status: {runtime_state.upper()} | {pnl_text} ", style="white")
         
         return Panel(
             Align.center(content),
@@ -75,7 +77,7 @@ class TerminalDashboard:
         content = Text(
             f"Uptime: {int(time.time() - self._stats_start)}s | "
             f"Positions: {pos_count} | "
-            f"Mode: {'PAPER' if self.config.paper_trading else 'LIVE'}",
+            f"Mode: {'PAPER' if self.config.paper_trading else 'LIVE'} | Runtime: {self.runtime.status().get('state', 'ui-only') if self.runtime else 'ui-only'}",
             style="dim white"
         )
         return Panel(Align.center(content), border_style="dim")

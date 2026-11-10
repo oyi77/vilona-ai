@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramController:
-    def __init__(self, bridge: Any):
+    def __init__(self, bridge: Any, runtime: Any = None):
         self.bridge = bridge
+        self.runtime = runtime
         self.config = get_config()
         self.telegram = self.config.telegram
         self.bot_token = self.telegram.bot_token
@@ -171,7 +172,9 @@ class TelegramController:
             await msg.reply_text("⚠️ Unauthorized", reply_markup=self.main_menu)
             return
 
-        status = "🟢 Running" if self._stats['scanner_active'] else "🔴 Stopped"
+        runtime_status = self.runtime.status() if self.runtime else {}
+        active = runtime_status.get('state') == 'running' if runtime_status else self._stats['scanner_active']
+        status = "🟢 Running" if active else "🔴 Stopped"
         kb = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("▶️ Start", callback_data="start_scan"),
@@ -183,7 +186,8 @@ class TelegramController:
             f"*⚙️ Scanner Control*\n\n"
             f"*State:* {status}\n"
             f"_Mode_: `{escape_md_v2('PAPER' if self._stats['paper_mode'] else 'LIVE')}`\n"
-            f"_Exchange_: `{escape_md_v2(self.config.exchange.name.upper())}`"
+            f"_Exchange_: `{escape_md_v2(self.config.exchange.name.upper())}`\n"
+            f"_Health_: `{escape_md_v2(runtime_status.get('state', 'ui-only'))}`"
         )
         await msg.reply_markdown_v2(text, reply_markup=kb)
 
@@ -246,16 +250,22 @@ class TelegramController:
             return
 
         if cmd == "start_scan":
-            self._stats['scanner_active'] = True
-            await query.message.reply_text("▶️ Scanner started.")
+            started = self.runtime.start() if self.runtime else True
+            self._stats['scanner_active'] = started
+            await query.message.reply_text("▶️ Scanner started." if started else "Scanner is already running or emergency-stopped.")
         elif cmd == "stop_scan":
+            stopped = self.runtime.stop() if self.runtime else True
             self._stats['scanner_active'] = False
-            await query.message.reply_text("⏹️ Scanner stopped.")
+            await query.message.reply_text("⏹️ Scanner stopped." if stopped else "Scanner is still stopping.")
         elif cmd == "restart_scan":
-            self._stats['scanner_active'] = False
+            if self.runtime:
+                self.runtime.stop()
+                started = self.runtime.start()
+            else:
+                started = True
+            self._stats['scanner_active'] = started
             await context.bot.send_message(query.message.chat_id, "🔄 Restarting...")
-            self._stats['scanner_active'] = True
-            await context.bot.send_message(query.message.chat_id, "▶️ Scanner restarted.")
+            await context.bot.send_message(query.message.chat_id, "▶️ Scanner restarted." if started else "❌ Scanner restart failed.")
 
     async def confirm_close_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
