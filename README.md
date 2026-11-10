@@ -1,68 +1,87 @@
-# Vilona AI v2 - AI-Powered Trading Agent
+# Vilona AI v2
 
-Upgraded decompiled Vilona AI v1. Supports crypto exchanges via CCXT and MT5,
-Telegram monitoring, optional multi-agent personas, headless/VPS deployment.
+Vilona AI is a Python trading-control service for crypto exchanges supported by [CCXT](https://github.com/ccxt/ccxt) and for MetaTrader 5. It provides a Telegram command center, a Rich terminal dashboard, optional Windows tray controls, SQLite state, and fail-closed risk/persona helpers.
 
-## 📸 Visuals
+> **Safety:** The default is paper trading. This project can place real orders when `vilona_PAPER_TRADING=false`; review the configuration and bridge behavior before enabling live trading. It is not financial advice.
 
-### Telegram Command Center
-The all-in-one mobile dashboard for your bot.
-![Telegram UI](https://placehold.co/300x400/1a1a2e/00d9ff?text=Telegram+UI+Demo)
+## Current capabilities
 
-### Terminal Dashboard
-Bloomberg-style CLI for VPS and local server monitoring.
-![Terminal Dashboard](https://placehold.co/600x400/1a1a2e/00d9ff?text=Terminal+Dashboard+Demo)
+- CCXT and MetaTrader 5 bridges for market data, positions, orders, SL/TP, cancellation, balances, and daily P&L.
+- Telegram views for status, balance, controls, and recent logs. Start/stop/restart and close-all are admin-only; close-all uses an explicit confirmation step.
+- Rich terminal monitoring with paper/live mode, exchange name, daily P&L, open-position count, and colored activity logs.
+- Risk helpers for confidence, spread, position count, daily loss, ATR-derived SL/TP, position sizing, break-even, trailing stops, and drift cancellation.
+- Optional researcher, trader, risk-manager, and judge prompt/parser modules, plus an async LLM client.
+- SQLite persistence and Docker, systemd, shell-runner, and Nuitka build support.
 
-### System Tray (Windows)
-Lightweight background presence with native notifications.
-![System Tray](https://placehold.co/400x120/1a1a2e/00d9ff?text=System+Tray+Demo)
+## Important current limitation
 
----
+The repository contains building blocks for autonomous scanning and proactive alerts, but the default `app_server.py` only connects the bridge and starts the UIs. It does not yet orchestrate candle collection → LLM signal → risk gate → judge → order execution on a recurring scan interval. Treat automatic trading, scheduled daily reports, and live AI alerts as planned capability until that engine is implemented and tested end to end.
 
-## ✨ Features
+## Quick start
 
-- **Rich Telegram UI**: Persistent menu buttons, inline control panels, MarkdownV2 styled cards, AI trade alerts with reasoning.
-- **Multi-exchange support**: Binance, Bybit, OKX, Kraken (via CCXT) + **MetaTrader 5**.
-- **Telegram Command Center**: No more typing commands. Use sleek inline buttons for Start/Stop, Close All, and refresh views.
-- **Terminal Dashboard**: Professional CLI using `rich` library. Fixed headers, live P/L tracking, color-coded logs.
-- **System Tray App (Windows)**: Discrete background presence with right-click quick access and native toast notifications.
-- **Proactive Intelligence**: Bot automatically pushes AI-driven trade alerts with entry reasoning, SL/TP, and P/L updates.
-- **Optional headless mode**: Run on VPS without display.
-- **Agent personas**: Optional researcher/trader/risk_manager/judge layers.
-- **Preserved Vilona AI logic**: Break-even, trailing stop, drift cancellation.
-- **SQLite persistence**: Survives restarts, tracks positions & trades.
-- **SystemOne integration**: Connect to JEV ecosystem (optional).
-- **Single executable**: Nuitka build for Windows (.exe) and Linux.
-
-## 🚀 Quick Start
-
-### Telegram Commands
-
-No commands needed! Use the persistent button menu:
-
-| Button | Description |
-|--------|-------------|
-| 📊 Status | View open positions, daily P/L, win rate |
-| 💰 Balance | Account equity for CCXT or MT5 |
-| ⚙️ Control | Start/Stop/Restart scanner |
-| 📜 Logs | Recent trading activity |
-
-## Architecture
-
+```bash
+git clone https://github.com/oyi77/vilona-ai.git
+cd vilona-ai
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+cp .env.example .env
+python app_server.py
 ```
-app_server.py (Bridge initialization)
-│
-├── Trading (bridge_ccxt.py / bridge_mt5.py)
-│   └── trade_executor_v2.py (BE/Trailing/Drift)
-├── UI / UX Overhaul
-│   ├── telegram_controller.py (Command Center)
-│   ├── terminal_dashboard.py (Rich CLI)
-│   └── system_tray.py (Desktop Presence)
-├── Agents (researcher.py, trader.py, risk_manager.py, judge.py)
-├── LLM Integration
-└── Persistence (SQLite)
+
+The application reads environment variables directly; it does not currently load `.env` files automatically. Export the variables from your shell or use a process manager with `EnvironmentFile` support. For a paper-mode local run:
+
+```bash
+export vilona_PAPER_TRADING=true
+export vilona_EXCHANGE=binance
+export vilona_HEADLESS=true
+python app_server.py
 ```
+
+Live mode requires exchange credentials, Telegram credentials and authorized chat IDs, and an LLM key according to `Config.validate()`. Keep `vilona_EXCHANGE_SANDBOX=true` while testing an exchange API integration.
+
+## Configuration and access control
+
+`.env.example` is the canonical variable list. All variables use the lowercase `vilona_` prefix. `vilona_TELEGRAM_CHAT_IDS` is the viewer allow-list. `vilona_TELEGRAM_ADMIN_IDS` must be a subset of that list and controls scanner actions and close-all. An empty list denies Telegram access rather than implicitly authorizing a user.
+
+Configuration is validated before a bridge is started. Secrets are masked by `Config.to_json()` and `Config.to_dataclass()`; do not commit `.env` or API credentials.
+
+## Project layout
+
+```text
+app_server.py                 Runtime lifecycle and bridge/UI startup
+config/__init__.py            Dataclass configuration and env parsing
+trading/bridge_ccxt.py        CCXT adapter
+trading/bridge_mt5.py         MetaTrader 5 adapter
+trading/trade_executor_v2.py  Protective trade-management helpers
+agents/                       Signal, research, risk, and judge modules
+llm/client.py                 Async OpenAI-compatible/Anthropic client
+ui/telegram_controller.py     Telegram command center
+ui/terminal_dashboard.py      Rich terminal dashboard
+ui/system_tray.py             Optional Windows tray integration
+core/state_db.py              Thread-safe SQLite persistence
+tests/                        Offline smoke and integration tests
+docs/                         UX and operations notes
+```
+
+## Tests and checks
+
+```bash
+python -m compileall -q .
+python -m pytest -q
+```
+
+The tests use in-memory fake bridges and do not require exchange credentials or network access. Install the project dependencies and `pytest` in the active virtual environment before running them.
+
+## Deployment
+
+- `python app_server.py` starts the service directly.
+- `scripts/run_vilona.sh paper` creates/uses `.venv`, installs dependencies, and writes logs under `logs/`.
+- `Dockerfile` starts a headless paper-mode container by default. Mount persistent storage if the SQLite database must survive replacement.
+- Edit `scripts/vilona.service` for the target Unix user and absolute project path before installation.
+- `scripts/build.py` and `.github/workflows/build.yml` build platform artifacts with Nuitka.
 
 ## License
 
-Original Vilona AI logic preserved. New code MIT licensed.
+The repository describes the new code as MIT licensed. Add or retain a root `LICENSE` file before publishing a distributable release so the license is explicit to GitHub and downstream users.

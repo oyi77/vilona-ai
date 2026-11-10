@@ -30,7 +30,7 @@ class TelegramController:
             'positions': [],
             'logs': [],
             'last_scan': 0,
-            'paper_mode': getattr(self.config.trading, 'paper_mode', True),
+            'paper_mode': self.config.paper_trading,
             'scanner_active': False,
         }
 
@@ -96,7 +96,8 @@ class TelegramController:
             return
 
         positions = self.bridge.get_positions()
-        pl, wins, total = calc_daily_pl(self.bridge, 'BTC/USDT')
+        symbol = self.config.trading.symbols[0]
+        pl, wins, total = calc_daily_pl(self.bridge, symbol)
 
         buttons = []
         if positions:
@@ -135,16 +136,11 @@ class TelegramController:
             await msg.reply_text("⚠️ Unauthorized", reply_markup=self.main_menu)
             return
 
-        if hasattr(self.bridge, 'exchange') and hasattr(self.bridge, 'fetch_balance'):
+        if hasattr(self.bridge, 'get_balance'):
             try:
-                balance = self.bridge.exchange.fetch_balance() if hasattr(self.bridge, 'exchange') else {}
-                if isinstance(balance, dict):
-                    usdt = balance.get('USDT', {})
-                    total = usdt.get('total', 0)
-                    free = usdt.get('free', 0)
-                else:
-                    total = 0
-                    free = 0
+                balance = self.bridge.get_balance()
+                total = balance.get('total', 0.0)
+                free = balance.get('free', 0.0)
                 text = (
                     f"*💰 Account Balance*\n\n"
                     f"*USDT Total:* `{total:.2f}`\n"
@@ -155,14 +151,13 @@ class TelegramController:
             await msg.reply_markdown_v2(text, reply_markup=self.main_menu)
         else:
             try:
-                balance_info = self.bridge.account_info() if hasattr(self.bridge, 'account_info') else {}
-                acc = balance_info[0] if isinstance(balance_info, (tuple, list)) else None
+                balance = self.bridge.get_balance()
                 text = (
                     f"*💰 Account Balance*\n\n"
-                    f"*Balance:* `{acc.balance:.2f}`\n"
-                    f"*Equity:* `{acc.equity:.2f}`\n"
-                    f"*Margin:* `{acc.margin:.2f}`\n"
-                    f"*Free Margin:* `{acc.margin_free:.2f}`\n"
+                    f"*Balance:* `{balance.get('balance', 0.0):.2f}`\n"
+                    f"*Equity:* `{balance.get('equity', 0.0):.2f}`\n"
+                    f"*Margin:* `{balance.get('margin', 0.0):.2f}`\n"
+                    f"*Free Margin:* `{balance.get('free_margin', 0.0):.2f}`\n"
                 )
             except Exception as e:
                 text = f"*❌ Error Fetching Balance*\n\n`{escape_md_v2(str(e))}`"
@@ -220,6 +215,10 @@ class TelegramController:
             await self.send_status(update, context)
         elif query.data == "close_all":
             await self.execute_close_all(update, context)
+        elif query.data == "confirm_close_all":
+            await self.confirm_close_all(update, context)
+        elif query.data == "cancel_close":
+            await query.edit_message_text("Close-all cancelled.", reply_markup=self.main_menu)
         elif query.data in ["start_scan", "stop_scan", "restart_scan"]:
             await self.execute_control(update, context, query.data)
 
@@ -257,6 +256,25 @@ class TelegramController:
             await context.bot.send_message(query.message.chat_id, "🔄 Restarting...")
             self._stats['scanner_active'] = True
             await context.bot.send_message(query.message.chat_id, "▶️ Scanner restarted.")
+
+    async def confirm_close_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        if not is_admin(update.effective_chat.id):
+            await query.answer("Admin only", show_alert=True)
+            return
+        positions = self.bridge.get_positions()
+        closed = 0
+        failures = []
+        for position in positions:
+            ok, message = self.bridge.close_position(position.ticket, position.symbol)
+            if ok:
+                closed += 1
+            else:
+                failures.append(f"{position.ticket}: {message}")
+        summary = f"Closed {closed}/{len(positions)} positions."
+        if failures:
+            summary += "\nFailures: " + "; ".join(failures[:5])
+        await query.edit_message_text(summary, reply_markup=self.main_menu)
 
     async def send_trade_alert(self, symbol: str, action: str, volume: float, price: float, sl: float, tp: float, ai_reason: str):
         if not self.bot_token:

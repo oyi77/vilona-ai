@@ -177,6 +177,21 @@ class CCXTBridge:
                 logger.error(f"[CCXTBridge] Error fetching tick for {symbol}: {e}")
             return None
 
+    def get_balance(self, currency: str = "USDT") -> Dict[str, float]:
+        """Return normalized total/free balance without exposing exchange internals."""
+        if not self._exchange:
+            return {"total": 0.0, "free": 0.0}
+        try:
+            balance = self._exchange.fetch_balance()
+            wallet = balance.get(currency, {}) or {}
+            return {
+                "total": float(wallet.get("total", 0.0) or 0.0),
+                "free": float(wallet.get("free", 0.0) or 0.0),
+            }
+        except Exception as e:
+            logger.error(f"[CCXTBridge] Error fetching balance: {e}")
+            return {"total": 0.0, "free": 0.0}
+
     def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
         positions = []
 
