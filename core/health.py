@@ -17,9 +17,14 @@ class HealthSnapshot:
     error_count: int = 0
     active_symbols: int = 0
     paper: bool = True
+    started_at: float = 0.0
+    emergency_latched: bool = False
+    emergency_file_present: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         if self.last_scan_at:
             data["last_scan_age_seconds"] = round(time.time() - self.last_scan_at, 2)
+        if self.started_at:
+            data["uptime_seconds"] = round(time.time() - self.started_at, 2)
         return data

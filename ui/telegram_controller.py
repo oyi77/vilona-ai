@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
+import uuid
 from typing import Optional, Any
 
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -26,6 +28,9 @@ class TelegramController:
         self.bot_token = self.telegram.bot_token
         self.running = False
         self._app: Optional[Application] = None
+        self._pending_confirmations: dict[str, dict[str, Any]] = {}
+        self._confirmation_lock = threading.Lock()
+        self.confirmation_ttl_seconds = 30
         self._stats = {
             'start_time': time.time(),
             'positions': [],
@@ -72,6 +77,112 @@ class TelegramController:
         )
         await update.message.reply_markdown_v2(text, reply_markup=self.main_menu)
 
+    async def on_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_authorized(update.effective_chat.id):
+            await update.message.reply_text("Unauthorized access")
+            return
+        text = (
+            "Vilona AI commands:\n\n"
+            "/status — positions and daily P/L\n"
+            "/health — runtime, bridge, database, and error state\n"
+            "/events [count] — recent persisted runtime events\n"
+            "/balance — account balance\n"
+            "/control — interactive runtime controls\n"
+            "/start_scan, /stop_scan, /restart_scan — admin controls\n"
+            "/emergency_stop [reason] — immediately halt the supervisor\n"
+            "/emergency_reset — admin confirmation required\n"
+            "/logs — recent controller logs"
+        )
+        await update.message.reply_text(text, reply_markup=self.main_menu)
+
+    async def on_health_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await self.send_health(update, context)
+
+    async def on_events_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        count = 10
+        if context.args:
+            try:
+                count = max(1, min(int(context.args[0]), 30))
+            except (TypeError, ValueError):
+                await update.message.reply_text("Usage: /events [1-30]")
+                return
+        await self.send_events(update, context, count)
+
+    async def on_emergency_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin(update.effective_chat.id):
+            await update.message.reply_text("Admin only")
+            return
+        reason = " ".join(context.args).strip() if context.args else "emergency stop requested from Telegram"
+        if self.runtime:
+            self.runtime.emergency_stop(reason)
+            await update.message.reply_text(f"EMERGENCY STOP engaged. Reason: {reason}")
+        else:
+            await update.message.reply_text("Runtime supervisor is unavailable.")
+
+    async def on_emergency_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin(update.effective_chat.id):
+            await update.message.reply_text("Admin only")
+            return
+        token = self._create_confirmation(update.effective_chat.id, "emergency_reset")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Confirm reset", callback_data=f"confirm:emergency_reset:{token}"),
+             InlineKeyboardButton("Cancel", callback_data=f"cancel:{token}")]
+        ])
+        await update.message.reply_text(
+            "Reset emergency stop? This only clears the supervisor latch; it does not start scanning.",
+            reply_markup=kb,
+        )
+
+    async def on_start_scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await self._command_control(update, "start_scan")
+
+    async def on_stop_scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await self._command_control(update, "stop_scan")
+
+    async def on_restart_scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await self._command_control(update, "restart_scan")
+
+    async def _command_control(self, update: Update, action: str):
+        if not is_admin(update.effective_chat.id):
+            await update.message.reply_text("Admin only")
+            return
+        result = self._apply_control(action)
+        await update.message.reply_text(result)
+
+    def _apply_control(self, action: str) -> str:
+        if not self.runtime:
+            return "Runtime supervisor is unavailable."
+        if action == "start_scan":
+            return "Scanner started." if self.runtime.start() else "Scanner was not started (already running or emergency-stopped)."
+        if action == "stop_scan":
+            return "Scanner stopped." if self.runtime.stop() else "Scanner is still stopping."
+        if action == "restart_scan":
+            self.runtime.stop()
+            return "Scanner restarted." if self.runtime.start() else "Scanner restart blocked (check emergency-stop state)."
+        return "Unknown control action."
+
+    def _create_confirmation(self, chat_id: int, action: str, payload: Optional[dict[str, Any]] = None) -> str:
+        token = uuid.uuid4().hex[:12]
+        with self._confirmation_lock:
+            self._pending_confirmations[token] = {
+                "chat_id": chat_id,
+                "action": action,
+                "payload": payload or {},
+                "expires_at": time.time() + self.confirmation_ttl_seconds,
+            }
+        return token
+
+    def _consume_confirmation(self, token: str, chat_id: int, action: str) -> Optional[dict[str, Any]]:
+        with self._confirmation_lock:
+            pending = self._pending_confirmations.get(token)
+            if not pending or pending["chat_id"] != chat_id or pending["action"] != action:
+                return None
+            if pending["expires_at"] < time.time():
+                self._pending_confirmations.pop(token, None)
+                return None
+            self._pending_confirmations.pop(token, None)
+            return pending["payload"]
+
     async def on_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_authorized(update.effective_chat.id):
             return
@@ -108,8 +219,10 @@ class TelegramController:
 
         pnl_str = f"{pl:.2f}"
         pnl_ico = self._profit_icon(pl)
+        runtime_state = (self.runtime.status().get("state", "ui-only") if self.runtime else "ui-only")
         text = (
             f"*📊 Trading Status*\n\n"
+            f"*Runtime:* `{escape_md_v2(runtime_state)}`\n"
             f"*Positions Open:* `{len(positions)}`\n"
             f"*Daily P/L:* `{pnl_str}` USDT {pnl_ico}\n"
             f"*Win Rate:* `{wins}/{total}`\n\n"
@@ -175,12 +288,15 @@ class TelegramController:
         runtime_status = self.runtime.status() if self.runtime else {}
         active = runtime_status.get('state') == 'running' if runtime_status else self._stats['scanner_active']
         status = "🟢 Running" if active else "🔴 Stopped"
+        start_token = self._create_confirmation(chat_id, "control:start_scan")
+        stop_token = self._create_confirmation(chat_id, "control:stop_scan")
+        restart_token = self._create_confirmation(chat_id, "control:restart_scan")
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("▶️ Start", callback_data="start_scan"),
-                InlineKeyboardButton("⏹️ Stop", callback_data="stop_scan")
+                InlineKeyboardButton("▶️ Start", callback_data=f"control:start_scan:{start_token}"),
+                InlineKeyboardButton("⏹️ Stop", callback_data=f"control:stop_scan:{stop_token}")
             ],
-            [InlineKeyboardButton("🔄 Restart", callback_data="restart_scan")]
+            [InlineKeyboardButton("🔄 Restart", callback_data=f"control:restart_scan:{restart_token}")]
         ])
         text = (
             f"*⚙️ Scanner Control*\n\n"
@@ -190,6 +306,57 @@ class TelegramController:
             f"_Health_: `{escape_md_v2(runtime_status.get('state', 'ui-only'))}`"
         )
         await msg.reply_markdown_v2(text, reply_markup=kb)
+
+    async def send_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        msg = update.message or update.callback_query.message
+        if not is_authorized(update.effective_chat.id):
+            await msg.reply_text("Unauthorized", reply_markup=self.main_menu)
+            return
+        health = self.runtime.status() if self.runtime else {"state": "ui-only", "paper": self.config.paper_trading}
+        def value(key: str, default: str = "unknown") -> str:
+            return escape_md_v2(str(health.get(key, default)))
+        text = (
+            "*🩺 Runtime Health*\n\n"
+            f"*State:* `{value('state')}`\n"
+            f"*Mode:* `{value('paper')}`\n"
+            f"*Bridge:* `{value('bridge_connected')}`\n"
+            f"*Database:* `{value('database_healthy')}`\n"
+            f"*LLM:* `{value('llm_healthy')}`\n"
+            f"*Symbols:* `{value('active_symbols')}`\n"
+            f"*Errors:* `{value('error_count', '0')}`\n"
+            f"*Uptime:* `{value('uptime_seconds', 'not running')}s`\n"
+            f"*Emergency latch:* `{value('emergency_latched', 'false')}`\n"
+            f"*Stop file:* `{value('emergency_file_present', 'false')}`\n"
+            f"*Last scan age:* `{value('last_scan_age_seconds', 'never')}`\n"
+            f"*Last error:* `{value('last_error', 'none')}`"
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Refresh health", callback_data="refresh:health"),
+             InlineKeyboardButton("📜 Events", callback_data="view:events")],
+            [InlineKeyboardButton("🛑 Emergency stop", callback_data="emergency_stop"),
+             InlineKeyboardButton("🔓 Reset latch", callback_data="request:emergency_reset")],
+        ])
+        await msg.reply_markdown_v2(text, reply_markup=kb)
+
+    async def send_events(self, update: Update, context: ContextTypes.DEFAULT_TYPE, count: int = 10):
+        msg = update.message or update.callback_query.message
+        if not is_authorized(update.effective_chat.id):
+            await msg.reply_text("Unauthorized", reply_markup=self.main_menu)
+            return
+        if not self.runtime or not getattr(self.runtime, "state_db", None):
+            await msg.reply_text("Runtime event store is unavailable.", reply_markup=self.main_menu)
+            return
+        events = self.runtime.state_db.get_events(limit=count)
+        if not events:
+            await msg.reply_text("No persisted runtime events yet.", reply_markup=self.main_menu)
+            return
+        lines = ["*📜 Runtime Events*", ""]
+        for event in events:
+            stamp = time.strftime("%H:%M:%S", time.localtime(event.get("created_at", 0)))
+            kind = escape_md_v2(event.get("kind", "unknown"))
+            symbol = escape_md_v2(event.get("symbol", "") or "-")
+            lines.append(f"`{stamp}` *{kind}* `{symbol}`")
+        await msg.reply_markdown_v2("\n".join(lines), reply_markup=self.main_menu)
 
     async def send_logs(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = update.message or update.callback_query.message
@@ -209,22 +376,41 @@ class TelegramController:
 
     async def _cb_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
-        await query.answer()
-        chat_id = query.message.chat_id
+        chat_id = update.effective_chat.id
         if not is_authorized(chat_id):
             await query.answer("Unauthorized", show_alert=True)
             return
+        await query.answer()
 
         if query.data == "refresh_status":
             await self.send_status(update, context)
         elif query.data == "close_all":
             await self.execute_close_all(update, context)
-        elif query.data == "confirm_close_all":
-            await self.confirm_close_all(update, context)
-        elif query.data == "cancel_close":
-            await query.edit_message_text("Close-all cancelled.", reply_markup=self.main_menu)
-        elif query.data in ["start_scan", "stop_scan", "restart_scan"]:
-            await self.execute_control(update, context, query.data)
+        elif query.data.startswith("confirm:"):
+            _, action, token = query.data.split(":", 2)
+            if action == "close_all":
+                await self.confirm_close_all(update, context, token)
+            elif action == "emergency_reset":
+                await self.confirm_emergency_reset(update, token)
+        elif query.data.startswith("cancel:"):
+            _, token = query.data.split(":", 1)
+            self._consume_confirmation(token, chat_id, "close_all")
+            self._consume_confirmation(token, chat_id, "emergency_reset")
+            await query.edit_message_text("Confirmation cancelled.", reply_markup=self.main_menu)
+        elif query.data == "refresh:health":
+            await self.send_health(update, context)
+        elif query.data == "view:events":
+            await self.send_events(update, context)
+        elif query.data == "emergency_stop":
+            await self.execute_emergency_stop(update, context)
+        elif query.data == "request:emergency_reset":
+            await self.request_emergency_reset(update)
+        elif query.data.startswith("control:"):
+            _, action, token = query.data.split(":", 2)
+            if not self._consume_confirmation(token, chat_id, f"control:{action}"):
+                await query.edit_message_text("Control action expired or already used.", reply_markup=self.main_menu)
+                return
+            await self.execute_control(update, context, action)
 
     async def execute_close_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -237,11 +423,42 @@ class TelegramController:
             await query.answer("No positions to close.", show_alert=True)
             return
 
+        tickets = [{"ticket": p.ticket, "symbol": p.symbol} for p in positions]
+        token = self._create_confirmation(update.effective_chat.id, "close_all", {"positions": tickets})
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Yes, close all", callback_data="confirm_close_all"),
-             InlineKeyboardButton("Cancel", callback_data="cancel_close")]
+            [InlineKeyboardButton("Yes, close all", callback_data=f"confirm:close_all:{token}"),
+             InlineKeyboardButton("Cancel", callback_data=f"cancel:{token}")]
         ])
-        await query.message.reply_markdown_v2(f"*⚠️ Are you sure you want to close {len(positions)} positions?*", reply_markup=kb)
+        await query.message.reply_markdown_v2(
+            f"*⚠️ Are you sure you want to close {len(positions)} positions?*\n_Confirmation expires in {self.confirmation_ttl_seconds}s\\.",
+            reply_markup=kb,
+        )
+
+    async def execute_emergency_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        if not is_admin(update.effective_chat.id):
+            await query.answer("Admin only", show_alert=True)
+            return
+        if self.runtime:
+            self.runtime.emergency_stop("emergency stop requested from Telegram button")
+            await query.edit_message_text("EMERGENCY STOP engaged. Runtime will not restart until reset.", reply_markup=self.main_menu)
+        else:
+            await query.edit_message_text("Runtime supervisor is unavailable.", reply_markup=self.main_menu)
+
+    async def request_emergency_reset(self, update: Update):
+        query = update.callback_query
+        if not is_admin(update.effective_chat.id):
+            await query.answer("Admin only", show_alert=True)
+            return
+        token = self._create_confirmation(update.effective_chat.id, "emergency_reset")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Confirm reset", callback_data=f"confirm:emergency_reset:{token}"),
+             InlineKeyboardButton("Cancel", callback_data=f"cancel:{token}")]
+        ])
+        await query.edit_message_text(
+            f"Reset emergency latch? This does not start the runtime. Expires in {self.confirmation_ttl_seconds}s.",
+            reply_markup=kb,
+        )
 
     async def execute_control(self, update: Update, context: ContextTypes.DEFAULT_TYPE, cmd: str):
         query = update.callback_query
@@ -267,24 +484,42 @@ class TelegramController:
             await context.bot.send_message(query.message.chat_id, "🔄 Restarting...")
             await context.bot.send_message(query.message.chat_id, "▶️ Scanner restarted." if started else "❌ Scanner restart failed.")
 
-    async def confirm_close_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def confirm_close_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE, token: str):
         query = update.callback_query
         if not is_admin(update.effective_chat.id):
             await query.answer("Admin only", show_alert=True)
             return
-        positions = self.bridge.get_positions()
+        pending = self._consume_confirmation(token, update.effective_chat.id, "close_all")
+        if not pending:
+            await query.edit_message_text("Close-all confirmation expired or already used.", reply_markup=self.main_menu)
+            return
+        positions = pending.get("positions", [])
         closed = 0
         failures = []
         for position in positions:
-            ok, message = self.bridge.close_position(position.ticket, position.symbol)
+            ok, message = self.bridge.close_position(position["ticket"], position["symbol"])
             if ok:
                 closed += 1
             else:
-                failures.append(f"{position.ticket}: {message}")
+                failures.append(f"{position['ticket']}: {message}")
         summary = f"Closed {closed}/{len(positions)} positions."
         if failures:
             summary += "\nFailures: " + "; ".join(failures[:5])
         await query.edit_message_text(summary, reply_markup=self.main_menu)
+
+    async def confirm_emergency_reset(self, update: Update, token: str):
+        query = update.callback_query
+        if not is_admin(update.effective_chat.id):
+            await query.answer("Admin only", show_alert=True)
+            return
+        if not self._consume_confirmation(token, update.effective_chat.id, "emergency_reset"):
+            await query.edit_message_text("Reset confirmation expired or already used.", reply_markup=self.main_menu)
+            return
+        if self.runtime:
+            self.runtime.reset_emergency_stop()
+            await query.edit_message_text("Emergency stop reset. Runtime remains stopped; use Start when ready.", reply_markup=self.main_menu)
+        else:
+            await query.edit_message_text("Runtime supervisor is unavailable.", reply_markup=self.main_menu)
 
     async def send_trade_alert(self, symbol: str, action: str, volume: float, price: float, sl: float, tp: float, ai_reason: str):
         if not self.bot_token:
@@ -306,6 +541,18 @@ class TelegramController:
 
     def register_commands(self, application: Application):
         application.add_handler(CommandHandler('start', self.on_start))
+        application.add_handler(CommandHandler('help', self.on_help))
+        application.add_handler(CommandHandler('status', self.send_status))
+        application.add_handler(CommandHandler('health', self.on_health_command))
+        application.add_handler(CommandHandler('events', self.on_events_command))
+        application.add_handler(CommandHandler('balance', self.send_balance))
+        application.add_handler(CommandHandler('control', self.send_control))
+        application.add_handler(CommandHandler('logs', self.send_logs))
+        application.add_handler(CommandHandler('start_scan', self.on_start_scan_command))
+        application.add_handler(CommandHandler('stop_scan', self.on_stop_scan_command))
+        application.add_handler(CommandHandler('restart_scan', self.on_restart_scan_command))
+        application.add_handler(CommandHandler('emergency_stop', self.on_emergency_stop))
+        application.add_handler(CommandHandler('emergency_reset', self.on_emergency_reset))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         application.add_handler(CallbackQueryHandler(self._cb_query))
 
