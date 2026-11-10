@@ -109,6 +109,24 @@ class MT5Bridge:
         acc = mt5.account_info() if self._connected else None
         return str(acc.login) if acc else ''
 
+    def get_balance(self) -> Dict[str, float]:
+        """Return account fields used by the UI without leaking MT5 objects."""
+        acc = mt5.account_info() if self._connected else None
+        if not acc:
+            return {"balance": 0.0, "equity": 0.0, "margin": 0.0, "free_margin": 0.0, "total": 0.0, "free": 0.0}
+        balance = float(acc.balance)
+        equity = float(acc.equity)
+        free_margin = float(acc.margin_free)
+        return {
+            "balance": balance,
+            "equity": equity,
+            "margin": float(acc.margin),
+            "free_margin": free_margin,
+            # Common aliases used by exchange-oriented UI code.
+            "total": equity,
+            "free": free_margin,
+        }
+
     # --- Symbol Info ---
     def get_symbol_info(self, symbol: str) -> Optional[SymbolInfo]:
         if symbol in self._symbol_info_cache:

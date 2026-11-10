@@ -68,6 +68,7 @@ class TradingConfig:
     max_drift_points: int = 100
     max_drift_candles: int = 12
     drift_timeframe: str = "15m"
+    paper_trading: bool = True
 
 
 @dataclass
@@ -140,7 +141,8 @@ class Config:
         config.trading.scan_interval = int(os.getenv("vilona_SCAN_INTERVAL", str(config.trading.scan_interval)))
         config.trading.max_risk_per_trade_pct = float(os.getenv("vilona_MAX_RISK_PCT", str(config.trading.max_risk_per_trade_pct)))
         config.trading.max_daily_loss_pct = float(os.getenv("vilona_MAX_DAILY_LOSS_PCT", str(config.trading.max_daily_loss_pct)))
-        config.trading.paper_trading = os.getenv("vilona_PAPER_TRADING", "true").lower() == "true"
+        config.paper_trading = os.getenv("vilona_PAPER_TRADING", "true").lower() == "true"
+        config.trading.paper_trading = config.paper_trading
         
         config.headless = os.getenv("vilona_HEADLESS", "true").lower() == "true"
         config.debug = os.getenv("vilona_DEBUG", "false").lower() == "true"
@@ -182,6 +184,12 @@ class Config:
 
         if not self.enabled_personas:
             errors.append("enabled_personas must be non-empty")
+        if not 0.0 <= self.trading.min_confidence <= 1.0:
+            errors.append("trading.min_confidence must be between 0 and 1")
+        if self.trading.scan_interval <= 0:
+            errors.append("trading.scan_interval must be greater than 0")
+        if self.telegram.admin_chat_ids and not set(self.telegram.admin_chat_ids).issubset(self.telegram.chat_ids):
+            errors.append("telegram.admin_chat_ids must be a subset of telegram.chat_ids")
 
         return errors
     

@@ -32,12 +32,13 @@ class TerminalDashboard:
             self._logs.pop(0)
 
     def _get_header(self) -> Panel:
-        mode = "LIVE" if not getattr(self.config.trading, 'paper_mode', True) else "PAPER"
+        mode = "LIVE" if not self.config.paper_trading else "PAPER"
         exchange = self.config.exchange.name.upper()
         
         # Try to get current P/L if available
         try:
-            pl, _, _ = self.bridge.calc_daily_pl('BTC/USDT') if hasattr(self.bridge, 'calc_daily_pl') else (0.0, 0, 0)
+            symbol = self.config.trading.symbols[0]
+            pl, _, _ = self.bridge.calculate_daily_pl(symbol)
             pnl_color = "green" if pl > 0 else "red" if pl < 0 else "white"
             pnl_text = f"[{pnl_color}]P/L: {pl:+.2f} USDT[/{pnl_color}]"
         except:
@@ -74,7 +75,7 @@ class TerminalDashboard:
         content = Text(
             f"Uptime: {int(time.time() - self._stats_start)}s | "
             f"Positions: {pos_count} | "
-            f"Mode: {'PAPER' if getattr(self.config.trading, 'paper_mode', True) else 'LIVE'}",
+            f"Mode: {'PAPER' if self.config.paper_trading else 'LIVE'}",
             style="dim white"
         )
         return Panel(Align.center(content), border_style="dim")
