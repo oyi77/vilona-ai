@@ -25,6 +25,11 @@ from core.health import HealthSnapshot
 from core.state_db import StateDB
 from trading.execution import ExecutionPort, ExecutionRequest, LiveExecutionAdapter, PaperExecutionAdapter
 
+# KingAI-parity guards & observability (wired via config flags; zero overhead when disabled)
+from trading import news_guard, session_guard
+from trading.recorder import recorder
+from llm import budget as llm_budget
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +74,12 @@ class RuntimeSupervisor:
         self.config = config
         self.state_db = state_db or StateDB()
         self.signal_provider = signal_provider or WaitSignalProvider()
+        # --- KingAI-parity guards ---
+        try:
+            self._session_state = session_guard.load_session('default')
+        except Exception as e:
+            logger.warning("session_guard load failed: %s", e)
+            self._session_state = None
         self.judge_client = judge_client
         self.execution: ExecutionPort = (
             PaperExecutionAdapter(bridge)
@@ -211,6 +222,21 @@ class RuntimeSupervisor:
                 return result
             positions = self.execution.get_positions(symbol)
             pl, _, _ = self.bridge.calculate_daily_pl(symbol)
+            # KingAI-parity budget gate (llm/budget.py)
+            over_limit, _action, _used, _limit = llm_budget.check('autotrade')
+            if over_limit:
+                self._event("budget_exceeded", symbol, {"used": _used, "limit": _limit})
+                return ScanResult(symbol, "WAIT", False, f"daily LLM budget exceeded ({_used}/{_limit})")
+
+            # KingAI-parity news guard (trading/news_guard.py)
+            try:
+                news_status = news_guard.get_zone_status(None, 30, 5)
+                if news_status.zone == 'FORCE_CLOSE':
+                    self._event("news_force_close", symbol, {"zone": news_status.zone})
+                    return ScanResult(symbol, "WAIT", False, f"news guard: {news_status.zone}")
+            except Exception as news_err:
+                logger.debug("news guard skip: %s", news_err)
+
             signal = await self.signal_provider.generate(snapshot)
             if signal.symbol != symbol:
                 signal = Signal(symbol, "WAIT", 0.0, "signal symbol mismatch")
