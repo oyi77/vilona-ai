@@ -8,7 +8,9 @@ import os
 def test_paper_headless_boot_does_not_exit():
     """Process must survive 3+ seconds with default paper/headless config."""
     # Empty env → all defaults: paper_trading=True, headless=True, no tokens
-    env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")}
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
+           "SystemRoot": os.environ.get("SystemRoot", r"C:\Windows"),
+           "TEMP": os.environ.get("TEMP", ""), "TMP": os.environ.get("TMP", "")}
     proc = subprocess.Popen(
         [sys.executable, "app_server.py"],
         stdout=subprocess.PIPE,
