@@ -85,6 +85,49 @@ def main():
         logger.error(f"Critical Error initializing bridge: {e}")
         return 1
 
+    # 2. Start a lightweight HTTP API for Telegram Serverless handlers
+    #    (serverless bot → this Python backend for trading data)
+    from threading import Thread
+    from fastapi import FastAPI, HTTPException
+    import uvicorn as _uvicorn
+
+    api_app = FastAPI(title="Vilona AI Trading Backend")
+
+    @api_app.get("/api/status")
+    def api_status(chat_id: int):
+        runtime_status = runtime.status() if runtime else {}
+        positions = []
+        try:
+            positions = [p for p in bridge.get_positions()][:10]
+        except Exception:
+            pass
+        return {
+            "runtime_state": runtime_status.get("state", "idle"),
+            "paper": runtime_status.get("paper", cfg.paper_trading),
+            "positions": [
+                {"ticket": p.ticket, "symbol": p.symbol, "type": str(p.type)}
+                for p in positions
+            ],
+            "symbols": cfg.trading.symbols,
+        }
+
+    @api_app.get("/api/balance")
+    def api_balance(chat_id: int):
+        try:
+            bal = bridge.get_balance()
+            return {"total": round(bal.get("total", bal.get("equity", 0.0)), 2),
+                    "free": round(bal.get("free", 0.0), 2)}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
+    def _run_api():
+        try:
+            _uvicorn.run(api_app, host="127.0.0.1", port=8300, log_level="warning")
+        except Exception as e:
+            logger.error(f"API server crashed: {e}")
+
+    Thread(target=_run_api, daemon=True, name="api-server").start()
+
     # 2. Initialize UI Layers
     signal_provider = None
     judge_client = None
