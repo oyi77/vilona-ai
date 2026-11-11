@@ -119,8 +119,9 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         """Load configuration from environment variables"""
+        from dotenv import load_dotenv
+        load_dotenv()  # .env (gitignored) — bot token, LLM key, exchange creds
         config = cls()
-        
         config.exchange.name = os.getenv("vilona_EXCHANGE", config.exchange.name)
         config.exchange.api_key = os.getenv("vilona_EXCHANGE_API_KEY", config.exchange.api_key)
         config.exchange.api_secret = os.getenv("vilona_EXCHANGE_API_SECRET", config.exchange.api_secret)
