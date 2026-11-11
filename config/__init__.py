@@ -72,6 +72,13 @@ class TradingConfig:
     paper_trading: bool = True
     max_data_age_seconds: int = 120
 
+    news_guard_enabled: bool = False
+    news_guard_before_min: int = 30
+    news_guard_force_close_min: int = 5
+    news_guard_after_min: int = 30
+    budget_limit_daily: int = 0  # 0 = unlimited
+    budget_on_limit: str = "stop"  # "stop" | "free"
+    recorder_enabled: bool = True
 
 @dataclass
 class DatabaseConfig:
@@ -144,6 +151,13 @@ class Config:
             config.trading.timeframes = [x.strip() for x in timeframes_str.split(",")]
         
         config.trading.scan_interval = int(os.getenv("vilona_SCAN_INTERVAL", str(config.trading.scan_interval)))
+        config.trading.news_guard_enabled = os.getenv("vilona_NEWS_GUARD_ENABLED", str(config.trading.news_guard_enabled)).lower() == "true"
+        config.trading.news_guard_before_min = int(os.getenv("vilona_NEWS_GUARD_BEFORE_MIN", str(config.trading.news_guard_before_min)))
+        config.trading.news_guard_force_close_min = int(os.getenv("vilona_NEWS_GUARD_FORCE_CLOSE_MIN", str(config.trading.news_guard_force_close_min)))
+        config.trading.news_guard_after_min = int(os.getenv("vilona_NEWS_GUARD_AFTER_MIN", str(config.trading.news_guard_after_min)))
+        config.trading.budget_limit_daily = int(os.getenv("vilona_BUDGET_LIMIT_DAILY", str(config.trading.budget_limit_daily)))
+        config.trading.budget_on_limit = os.getenv("vilona_BUDGET_ON_LIMIT", config.trading.budget_on_limit)
+        config.trading.recorder_enabled = os.getenv("vilona_RECORDER_ENABLED", str(config.trading.recorder_enabled)).lower() == "true"
         config.trading.max_risk_per_trade_pct = float(os.getenv("vilona_MAX_RISK_PCT", str(config.trading.max_risk_per_trade_pct)))
         config.trading.max_daily_loss_pct = float(os.getenv("vilona_MAX_DAILY_LOSS_PCT", str(config.trading.max_daily_loss_pct)))
         config.trading.max_data_age_seconds = int(os.getenv("vilona_MAX_DATA_AGE_SECONDS", str(config.trading.max_data_age_seconds)))

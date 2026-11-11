@@ -223,19 +223,25 @@ class RuntimeSupervisor:
             positions = self.execution.get_positions(symbol)
             pl, _, _ = self.bridge.calculate_daily_pl(symbol)
             # KingAI-parity budget gate (llm/budget.py)
-            over_limit, _action, _used, _limit = llm_budget.check('autotrade')
-            if over_limit:
-                self._event("budget_exceeded", symbol, {"used": _used, "limit": _limit})
-                return ScanResult(symbol, "WAIT", False, f"daily LLM budget exceeded ({_used}/{_limit})")
+            if getattr(self.config.trading, 'budget_limit_daily', 0) > 0:
+                over_limit, _action, _used, _limit = llm_budget.check('autotrade')
+                if over_limit:
+                    self._event("budget_exceeded", symbol, {"used": _used, "limit": _limit})
+                    return ScanResult(symbol, "WAIT", False, f"daily LLM budget exceeded ({_used}/{_limit})")
 
-            # KingAI-parity news guard (trading/news_guard.py)
-            try:
-                news_status = news_guard.get_zone_status(None, 30, 5)
-                if news_status.zone == 'FORCE_CLOSE':
-                    self._event("news_force_close", symbol, {"zone": news_status.zone})
-                    return ScanResult(symbol, "WAIT", False, f"news guard: {news_status.zone}")
-            except Exception as news_err:
-                logger.debug("news guard skip: %s", news_err)
+            if getattr(self.config.trading, 'news_guard_enabled', False):
+                try:
+                    news_status = news_guard.get_zone_status(
+                        None,
+                        self.config.trading.news_guard_before_min,
+                        self.config.trading.news_guard_force_close_min,
+                        self.config.trading.news_guard_after_min,
+                    )
+                    if news_status.zone == 'FORCE_CLOSE':
+                        self._event("news_force_close", symbol, {"zone": news_status.zone})
+                        return ScanResult(symbol, "WAIT", False, f"news guard: {news_status.zone}")
+                except Exception as news_err:
+                    logger.debug("news guard skip: %s", news_err)
 
             signal = await self.signal_provider.generate(snapshot)
             if signal.symbol != symbol:
@@ -254,6 +260,22 @@ class RuntimeSupervisor:
             execution = self.execution.submit(request)
             payload = {"accepted": execution.accepted, "paper": execution.paper, "ticket": execution.ticket, "message": execution.message}
             self._event("order_filled" if execution.accepted else "order_failed", symbol, payload)
+            if getattr(self.config.trading, 'recorder_enabled', False) and execution.accepted:
+                try:
+                    recorder.record_signal(
+                        symbol=symbol, mode='runtime',
+                        strategy=getattr(signal, 'source_role', '') or '',
+                        probability=signal.confidence if signal.confidence else None,
+                        action=signal.action,
+                        entry_type='MARKET',
+                        entry=snapshot.tick_bid,
+                        sl=verdict.sl_price or 0.0,
+                        tp=verdict.tp_price or 0.0,
+                        signal_id=int(execution.ticket or 0),
+                        source='paper' if execution.paper else 'live',
+                    )
+                except Exception as rec_err:
+                    logger.debug("recorder skip: %s", rec_err)
             if execution.accepted:
                 self.health.last_success_at = time.time()
             return ScanResult(symbol, signal.action, execution.accepted, execution.message, payload)

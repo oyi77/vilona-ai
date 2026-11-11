@@ -98,82 +98,92 @@ VALID_ACTIONS = {
     'SELL'}
 
 class Recorder:
-    
+    """Thread-safe wrapper around trade_history — serialises ALL access
+    with one RLock so main-thread export/import and scan-thread
+    record_signal never race on king_signals.csv."""
+
     def __init__(self):
         self._lock = threading.RLock()
 
-    
-    def init_db(self = None):
+    def init_db(self) -> None:
         with self._lock:
             trade_history.init_db()
-            None(None, None, None)
-            return None
-            with None:
-                if not None:
-                    pass
 
-    
-    def record_signal(self = None, **kwargs):
-        pass
-    # WARNING: Decompyle incomplete
-
-    
-    def resolve_outcomes(self = None, mt5_module = None):
+    def record_signal(self, symbol: str, mode: str, strategy=None,
+                      probability=None, action: str = '', entry_type: str = '',
+                      entry: float = 0.0, sl: float = 0.0, tp: float = 0.0,
+                      signal_id: int = 0, source: str = 'live') -> None:
         with self._lock:
-            None(None, None, None)
+            trade_history.record_signal(
+                symbol=symbol, mode=mode, strategy=strategy,
+                probability=probability, action=action, entry_type=entry_type,
+                entry=entry, sl=sl, tp=tp, signal_id=signal_id, source=source,
+            )
+
+    def resolve_outcomes(self, mt5_module) -> int:
+        with self._lock:
             return trade_history.resolve_outcomes(mt5_module)
-            with None:
-                if not None:
-                    pass
 
-    
-    def get_strategy_weight(self = None, strategy = None):
+    def get_strategy_weight(self, strategy: str) -> float:
         with self._lock:
-            None(None, None, None)
             return trade_history.get_strategy_weight(strategy)
-            with None:
-                if not None:
-                    pass
 
-    
-    def clear_history(self = None):
+    def clear_history(self) -> None:
         with self._lock:
             trade_history.clear_history()
-            None(None, None, None)
-            return None
-            with None:
-                if not None:
-                    pass
 
-    
-    def export_ml_csv(self = None, path = None):
-        '''Tulis dataset ML (kolom whitelist, symbol dinormalisasi) ke
-        `path`. Return (sukses, jumlah_baris, pesan_error). Hanya baris
-        dengan outcome final (WIN/LOSS) yang diekspor - baris PENDING
-        belum punya label hasil, tidak berguna untuk pembelajaran.'''
+    def export_ml_csv(self, path):
+        """Tulis dataset ML (kolom whitelist, outcome=WIN/LOSS saja) ke path.
+        Return (ok, n_exported, error_msg)."""
         with self._lock:
-            rows = trade_history._read_all_rows()
-            None(None, None, None)
-        with None:
-            if not None:
-                pass
-        exported = 0
-    # WARNING: Decompyle incomplete
+            try:
+                rows = trade_history._read_all_rows()
+                final = [r for r in rows if r.get('outcome') in ('WIN', 'LOSS')]
+                with open(path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.DictWriter(f, fieldnames=trade_history.FIELDNAMES)
+                    writer.writeheader()
+                    for r in final:
+                        writer.writerow(r)
+                return (True, len(final), '')
+            except Exception as e:
+                return (False, 0, str(e))
 
-    
-    def import_ml_csv(self = None, path = None):
-        '''Baca file dataset ML (hasil export_ml_csv milik user lain) dan
-        tambahkan ke histori lokal dengan source="imported". Return
-        (sukses, jumlah_masuk, jumlah_dilewati, pesan_error).
-
-        Validasi per baris (baris tidak valid DILEWATI, bukan
-        menggagalkan seluruh import - file dari luar tidak bisa
-        dipercaya bersih): action harus BUY/SELL, outcome harus WIN/LOSS,
-        strategy tidak kosong. Duplikat (created_at+symbol+action sama
-        dengan baris yang sudah ada) dilewati supaya import file yang
-        sama dua kali tidak menggandakan data & merusak winrate.'''
-        pass
-    # WARNING: Decompyle incomplete
-
+    def import_ml_csv(self, path):
+        """Baca dataset ML dari path, tambahkan source='imported'.
+        Return (ok, n_imported, n_skipped, error_msg). Baris tidak valid
+        (action bukan BUY/SELL, outcome bukan WIN/LOSS, strategy kosong)
+        dilewati per baris."""
+        with self._lock:
+            try:
+                import csv
+                with open(path, 'r', newline='', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    incoming = [dict(r) for r in reader]
+            except Exception as e:
+                return (False, 0, 0, str(e))
+            existing_keys = {
+                (r.get('created_at', ''), r.get('symbol', ''), r.get('action', ''))
+                for r in trade_history._read_all_rows()
+            }
+            imported = skipped = 0
+            for row in incoming:
+                if row.get('action') not in ('BUY', 'SELL'):
+                    skipped += 1
+                    continue
+                if row.get('outcome') not in ('WIN', 'LOSS'):
+                    skipped += 1
+                    continue
+                if not row.get('strategy'):
+                    skipped += 1
+                    continue
+                key = (row.get('created_at', ''), row.get('symbol', ''), row.get('action', ''))
+                if key in existing_keys:
+                    skipped += 1
+                    continue
+                existing_keys.add(key)
+                row['source'] = 'imported'
+                trade_history.record_signals_bulk([row])
+                imported += 1
+            return (True, imported, skipped, '')
 
 recorder = Recorder()
