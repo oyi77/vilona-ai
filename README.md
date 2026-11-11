@@ -1,96 +1,141 @@
 # Vilona AI v2
 
-Vilona AI is a Python trading-control service for crypto exchanges supported by [CCXT](https://github.com/ccxt/ccxt) and for MetaTrader 5. It provides a Telegram command center, a Rich terminal dashboard, optional Windows tray controls, SQLite state, and fail-closed risk/persona helpers.
+AI-powered crypto trading agent — Python backend + serverless Telegram bot.
 
-> **Safety:** The default is paper trading. This project can place real orders when `vilona_PAPER_TRADING=false`; review the configuration and bridge behavior before enabling live trading. It is not financial advice.
+```
+python app_server.py          # Python backend (FastAPI on :8300 + polling Telegram bot)
+cd tgcloud-bot && npm run deploy   # Serverless Telegram Mini App bot
+```
 
-## Current capabilities
+## What it does
 
-- CCXT and MetaTrader 5 bridges for market data, positions, orders, SL/TP, cancellation, balances, and daily P&L.
-- Telegram views for status, balance, controls, and recent logs. Start/stop/restart and close-all are admin-only; close-all uses an explicit confirmation step.
-- Telegram commands for `/health`, persisted `/events`, `/start_scan`, `/stop_scan`, `/restart_scan`, immediate `/emergency_stop`, and confirmed `/emergency_reset`. Destructive callbacks are chat-bound, single-use, and expire after 30 seconds.
-- Rich terminal monitoring with paper/live mode, exchange name, daily P&L, open-position count, and colored activity logs.
-- Risk helpers for confidence, spread, position count, daily loss, ATR-derived SL/TP, position sizing, break-even, trailing stops, and drift cancellation.
-- Optional researcher, trader, risk-manager, and judge prompt/parser modules, plus an async LLM client.
-- SQLite persistence and Docker, systemd, shell-runner, and Nuitka build support.
-- Paper-first `RuntimeSupervisor` with cancellable scans, stale-data rejection, risk gating, event recording, health state, and an emergency-stop file.
-- Explicit paper/live execution adapters. Paper mode never calls a broker order method.
-
-## Runtime boundary
-
-`RuntimeSupervisor` now orchestrates candle collection → signal provider → risk gate → optional judge → paper/live execution on a recurring interval. It is stopped by default; enable it with `vilona_AUTONOMY_ENABLED=true`. Without an LLM key or injected provider, the safe signal is `WAIT`. Daily reports, proactive alerts, and production-grade broker reconciliation remain separate follow-up work.
+- **Trading**: CCXT (crypto) and MetaTrader 5 (forex) bridges — market data, positions, orders, SL/TP, P&L.
+- **Intelligence**: LLM-powered signal generation, risk gating, SSE streaming chat, model routing, budget controls.
+- **Telegram command center**: serverless bot (`@agent_1ai2_bot`) — registration, per-user exchange credentials, admin approval flow, trading data proxy to Python backend.
+- **Terminal dashboard**: Rich TUI with paper/live mode, daily P&L, position count, colored logs.
+- **Runtime supervisor**: cancellable scan loop, stale-data rejection, risk guards, event recording, emergency stop.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/oyi77/vilona-ai.git
 cd vilona-ai
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pip install -r requirements-dev.txt
 cp .env.example .env
+# fill in .env — then:
 python app_server.py
 ```
 
-The application reads environment variables directly; it does not currently load `.env` files automatically. Export the variables from your shell or use a process manager with `EnvironmentFile` support. For a paper-mode local run:
-
+Paper mode (headless, no credentials needed):
 ```bash
-export vilona_PAPER_TRADING=true
-export vilona_EXCHANGE=binance
-export vilona_HEADLESS=true
+export vilona_PAPER_TRADING=true vilona_HEADLESS=true vilona_EXCHANGE=binance
 python app_server.py
 ```
-
-Live mode requires exchange credentials, Telegram credentials and authorized chat IDs, and an LLM key according to `Config.validate()`. Keep `vilona_EXCHANGE_SANDBOX=true` while testing an exchange API integration.
-
-For smaller deployments, install `requirements-core.txt` for headless operation. Add `requirements-mt5.txt`, `requirements-desktop.txt`, or `requirements-build.txt` only when those capabilities are needed. Autonomous scanning remains opt-in with `vilona_AUTONOMY_ENABLED=true`.
-
-## Configuration and access control
-
-`.env.example` is the canonical variable list. All variables use the lowercase `vilona_` prefix. `vilona_TELEGRAM_CHAT_IDS` is the viewer allow-list. `vilona_TELEGRAM_ADMIN_IDS` must be a subset of that list and controls scanner actions and close-all. An empty list denies Telegram access rather than implicitly authorizing a user.
-
-Configuration is validated before a bridge is started. Secrets are masked by `Config.to_json()` and `Config.to_dataclass()`; do not commit `.env` or API credentials.
 
 ## Project layout
 
-```text
-app_server.py                 Runtime lifecycle and bridge/UI startup
-config/__init__.py            Dataclass configuration and env parsing
-trading/bridge_ccxt.py        CCXT adapter
-trading/bridge_mt5.py         MetaTrader 5 adapter
-trading/trade_executor_v2.py  Protective trade-management helpers
-agents/                       Signal, research, risk, and judge modules
-llm/client.py                 Async OpenAI-compatible/Anthropic client
-ui/telegram_controller.py     Telegram command center
-ui/terminal_dashboard.py      Rich terminal dashboard
-ui/system_tray.py             Optional Windows tray integration
-core/state_db.py              Thread-safe SQLite persistence
-core/runtime.py               Cancellable scan/execution supervisor
-trading/execution.py          Paper/live execution ports and adapters
-core/events.py                Append-only runtime event model
-core/health.py                Runtime health snapshots
-tests/                        Offline smoke and integration tests
-docs/                         UX and operations notes
+```
+app_server.py              Runtime lifecycle — bridge, FastAPI, Telegram controller, dashboard
+config/__init__.py         Dataclass config + env parsing (vilona_* prefix)
+
+# Trading
+trading/                   Bridge adapters, trade executor, risk guards, session guard,
+                           signal gatekeeper, economic calendar, news guard, performance
+data/king_signals.csv      Signal reference data
+
+# LLM / AI
+llm/                       Client, SSE endpoints, Anthropic adapter, model router,
+                           budget controls, reasoning module
+core/account_license.py    License client
+core/secure_store.py       Encrypted credential storage
+
+# User management
+ui/user_registry.py        SQLite-backed multi-user registration & session store
+ui/auth.py                 Auth helpers (is_authorized, is_admin)
+
+# Telegram (polling — runs with app_server.py)
+ui/telegram_controller.py  Legacy polling bot (python-telegram-bot >=21)
+
+# Telegram (serverless — deploy to Telegram infra)
+tgcloud-bot/               Serverless bot project (Node, deploy via tgcloud CLI)
+  tgcloud/schema.js        DB schema: users + per-user exchange credentials
+  tgcloud/handlers/       Update handlers (message, callback_query, …)
+  tgcloud/endpoints/      Mini App server-side endpoints
+
+# Runtime / persistence
+core/runtime.py           RuntimeSupervisor, event recording, health snapshots
+core/state_db.py          Thread-safe SQLite persistence
+core/market_cache.py      Market data cache
+
+# Desktop
+ui/terminal_dashboard.py  Rich TUI dashboard
+ui/system_tray.py         Optional Windows system tray (pystray)
+
+# Utilities
+armada/                   Hub, worker, governor, protocol, model — autonomous agents
+agents/                   Signal, research, risk, judge modules
+core/i18n*.py             i18n strings
+
+tests/                    pytest suite (29 tests, no credentials needed)
+Dockerfile                Headless paper-mode container
+docs/UX_DESIGN.md         UX & ops notes
 ```
 
-## Tests and checks
+## Serverless Telegram bot
+
+The `tgcloud-bot/` sub-project runs on Telegram's serverless platform. Deployed with:
 
 ```bash
-python -m compileall -q .
-python -m pytest -q
+cd tgcloud-bot
+npm install
+npx tgcloud login   # link your bot (platform token, not Telegram bot token)
+npx tgcloud push     # deploy schema + handlers
+npx tgcloud migrate  # apply schema changes
+npx tgcloud status   # verify deployment
 ```
 
-The tests use in-memory fake bridges and do not require exchange credentials or network access. Install the project dependencies and `pytest` in the active virtual environment before running them.
+Commands (`@agent_1ai2_bot`):
+| Command | Who | Description |
+|---------|-----|-------------|
+| `/start` | all | Register / re-login |
+| `/help` | approved | Command reference |
+| `/status` | approved | Positions + daily P&L (proxied to Python backend) |
+| `/balance` | approved | Account balance (proxied to backend) |
+| `/setkeys <ex> <key> <secret>` | approved | Store exchange credentials |
+| `/setbackend <url>` | admin | Set Python backend URL |
+| `/users` | admin | List registered users |
+| `/approve <chat_id>` | admin | Approve pending registration |
+| `/decline <chat_id>` | admin | Remove pending user |
+
+**First registrant is auto-approved as admin.** Admin sets the Python backend URL via `/setbackend http://your-host:8300` so `/status` and `/balance` can proxy through.
+
+## Configuration
+
+All variables use the `vilona_` prefix. See `.env.example` for the full list. Key variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `vilona_PAPER_TRADING` | `true` | Paper mode (no real orders) |
+| `vilona_HEADLESS` | `false` | Skip TUI/dashboard |
+| `vilona_EXCHANGE` | `binance` | Exchange name |
+| `vilona_TELEGRAM_BOT_TOKEN` | empty | Polling bot token |
+| `vilona_TELEGRAM_CHAT_IDS` | empty | Legacy viewer allowlist |
+| `vilona_TELEGRAM_ADMIN_IDS` | empty | Legacy admin list |
+| `vilona_AUTONOMY_ENABLED` | `false` | Start scan loop on boot |
+
+**Safety:** default is paper trading. Set `vilona_PAPER_TRADING=false` only after reviewing the bridge behavior.
+
+## Tests
+
+```bash
+python -m pytest tests/ -q
+# 29 tests, no credentials or network required
+```
 
 ## Deployment
 
-- `python app_server.py` starts the service directly.
-- `scripts/run_vilona.sh paper` creates/uses `.venv`, installs dependencies, and writes logs under `logs/`.
-- `Dockerfile` starts a headless paper-mode container by default. Mount persistent storage if the SQLite database must survive replacement.
-- Edit `scripts/vilona.service` for the target Unix user and absolute project path before installation.
-- `scripts/build.py` and `.github/workflows/build.yml` build platform artifacts with Nuitka.
-
-## License
-
-The repository describes the new code as MIT licensed. Add or retain a root `LICENSE` file before publishing a distributable release so the license is explicit to GitHub and downstream users.
+- **Direct**: `python app_server.py` — use `scripts/run_vilona.sh paper` for managed paper runs.
+- **Docker**: `docker build .` — starts headless paper mode by default.
+- **Systemd**: `scripts/vilona.service` — edit user/path, then `sudo systemctl link` and `start`.
+- **Serverless bot**: `cd tgcloud-bot && npm run deploy`
