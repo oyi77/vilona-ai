@@ -19,6 +19,65 @@ class LLMClient:
             'openai': 'https://api.openai.com/v1',
         }.get(self.config.provider, 'https://api.openai.com/v1')
 
+    async def _chat(self, system_prompt: str, user_prompt: str, model: str,
+                    temperature: float, max_tokens: int) -> Optional[Dict[str, Any]]:
+        """OpenAI-compatible chat with SSE streaming fallback.
+
+        Some gateways (combo routers) only deliver non-streaming responses
+        after all upstreams settle; SSE returns first-token fast and lets us
+        assemble the full text incrementally. Usage from the final chunk is
+        recorded to core/usage_log.py (KingAI parity).
+        """
+        from core import usage_log
+        session = await self._get_session()
+        headers = {"Authorization": f"Bearer {self.config.api_key}",
+                   "Content-Type": "application/json"}
+        payload = {"model": model, "temperature": temperature,
+                   "max_tokens": max_tokens, "stream": True,
+                   "messages": [{"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt}]}
+        text_parts: list = []
+        usage = None
+        try:
+            async with session.post(f"{self._base_url}/chat/completions",
+                                    json=payload, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.error("LLM API error %s: %s", resp.status,
+                                 (await resp.text())[:300])
+                    return None
+                async for raw in resp.content:
+                    line = raw.decode('utf-8', errors='replace').strip()
+                    if not line.startswith('data:'):
+                        continue
+                    data = line[5:].strip()
+                    if data == '[DONE]':
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    if chunk.get('usage'):
+                        usage = chunk['usage']
+                    for choice in chunk.get('choices') or []:
+                        delta = choice.get('delta') or {}
+                        piece = delta.get('content')
+                        if piece:
+                            text_parts.append(piece)
+        except asyncio.TimeoutError:
+            logger.error("LLM stream timeout after %ss", self.config.timeout)
+            return None
+        except Exception as e:
+            logger.error("LLM stream failed: %s", e)
+            return None
+        if usage:
+            usage_log.record(
+                feature='scan', model=model,
+                prompt=int(usage.get('prompt_tokens', 0) or 0),
+                completion=int(usage.get('completion_tokens', 0) or 0),
+                pricing=None, endpoint=str(self._base_url), cost=None,
+            )
+        return {"text": ''.join(text_parts), "usage": usage}
+
     async def _get_session(self):
         if self._session is None:
             timeout = aiohttp.ClientTimeout(total=self.config.timeout)
@@ -75,44 +134,27 @@ class LLMClient:
         model = model or self.config.model
         temperature = temperature or self.config.temperature
         max_tokens = max_tokens or self.config.max_tokens
-
+        # OpenAI-compatible gateways (incl. combo routers): SSE stream.
+        if self.config.provider != 'anthropic':
+            result = await self._chat(system_prompt, user_prompt, model,
+                                      temperature, max_tokens)
+            if not result:
+                return None
+            content = (result.get("choices") or [{}])[0].get("message", {}).get("content", "")
+            return content or result.get("text") or None
+        # Native Anthropic Messages API path.
+        url = f'{self._base_url}/v1/messages'
         payload = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
             "model": model,
-            "temperature": temperature,
+            "messages": [{"role": "user", "content": user_prompt}],
+            "system": system_prompt,
             "max_tokens": max_tokens,
+            "temperature": temperature,
         }
-
-        url = {
-            'openrouter': f'{self._base_url}/chat/completions',
-            'anthropic': f'{self._base_url}/v1/messages',
-            'openai': f'{self._base_url}/chat/completions',
-        }.get(self.config.provider, f'{self._base_url}/chat/completions')
-
-        if self.config.provider == 'anthropic':
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "user", "content": user_prompt},
-                ],
-                "system": system_prompt,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            }
-
         result = await self._request(url, payload)
         if not result:
             return None
-
-        if self.config.provider == 'anthropic':
-            return result.get('content', [{}])[0].get('text', '')
-        elif self.config.provider in ('openai', 'openrouter'):
-            return result.get('choices', [{}])[0].get('message', {}).get('content', '')
-        else:
-            return result.get('response', '')
+        return result.get('content', [{}])[0].get('text', '')
 
     async def close(self):
         if self._session:
