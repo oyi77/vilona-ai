@@ -9,3 +9,4 @@ id,created_at,symbol,mode,strategy,probability,action,entry_type,entry,sl,tp,sig
 8,2026-11-11T17:34:12.106683+00:00,BTC/USDT,runtime,trader,0.95,BUY,MARKET,100.0,97.1,106.1,1,PENDING,,,paper
 9,2026-11-11T17:39:23.842899+00:00,BTC/USDT,runtime,trader,0.95,BUY,MARKET,100.0,97.1,106.1,1,PENDING,,,paper
 10,2026-11-11T17:44:11.883252+00:00,BTC/USDT,runtime,trader,0.95,BUY,MARKET,100.0,97.1,106.1,1,PENDING,,,paper
+11,2026-11-11T20:45:28.137473+00:00,BTC/USDT,runtime,trader,0.95,BUY,MARKET,100.0,97.1,106.1,1,PENDING,,,paper
