@@ -9,10 +9,18 @@ import platform
 import requests
 from config import APP_NAME, APP_VERSION
 from core.i18n import tr
-LICENSE_SERVER_URL = 'https://roxyudeveloper.online/ea-license-server/license/check.php'
-APP_NAME = 'KingAI'
+# Self-hosted license server (was roxyudeveloper.online/ea-license-server).
+# Override base via env; the endpoint paths below match license_server.py.
+import os as _os
+LICENSE_SERVER_BASE = _os.getenv(
+    'vilona_LICENSE_SERVER_URL',
+    'https://license.vilona.ai',
+).rstrip('/')
+LICENSE_CHECK_PATH = _os.getenv('vilona_LICENSE_CHECK_PATH', '/license/check')
+LICENSE_HEARTBEAT_PATH = _os.getenv('vilona_LICENSE_HEARTBEAT_PATH', '/license/heartbeat')
+APP_NAME = _os.getenv('vilona_LICENSE_EA_NAME', 'VilonaAI')
 APP_VERSION = APP_VERSION
-LICENSE_CONTACT = '@bayuarissandi'
+LICENSE_CONTACT = _os.getenv('vilona_LICENSE_CONTACT', '@oyi77')
 LICENSE_CHECK_INTERVAL = 3600
 HEARTBEAT_INTERVAL = 3600
 def _url_encode(text: str) -> str:
