@@ -267,3 +267,34 @@ def set_config(config: Config) -> None:
     """Set global config instance"""
     global _config
     _config = config
+
+
+# --- KingAI-parity data paths (persisted across restarts) ---
+import os as _os
+import sys as _sys
+from pathlib import Path as _Path
+
+
+def _data_root() -> _Path:
+    override = _os.environ.get('VILONA_DATA_ROOT')
+    if override:
+        return _Path(override)
+    if not getattr(_sys, 'frozen', False):
+        return _Path(__file__).resolve().parents[1]
+    base = _Path(_os.environ.get('LOCALAPPDATA') or _Path.home() / 'AppData' / 'Local') / 'Vilona AI'
+    try:
+        (base / 'data').mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return _Path(_sys.executable).resolve().parent
+    return base
+
+
+DATA_ROOT = _data_root()
+DATA_DIR = DATA_ROOT / 'data'
+
+CACHE_DIR = DATA_DIR / 'cache'
+
+APP_NAME = 'Vilona AI'
+APP_SLUG = 'vilona-ai'
+APP_VERSION = '2.0.0'
+PROJECT_ROOT = DATA_ROOT
