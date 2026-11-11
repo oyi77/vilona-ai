@@ -61,21 +61,185 @@ class TelegramController:
         return "⚪"
 
     async def on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not is_authorized(update.effective_chat.id):
-            await update.message.reply_text("⚠️ Unauthorized access")
+        from ui.auth import get_registry
+        chat_id = update.effective_chat.id
+        user = update.effective_user
+        registry = get_registry()
+        session = registry.get(chat_id)
+
+        if session is None:
+            # New user — register (pending approval unless first)
+            session = registry.register(
+                chat_id=chat_id,
+                username=getattr(user, 'username', '') or '',
+                first_name=getattr(user, 'first_name', '') or '',
+            )
+            if session.approved and session.is_admin:
+                await update.message.reply_text(
+                    "🤖 *Vilona AI v2* first-time setup complete\\.\n\n"
+                    "You are registered as *admin* — approve other users with "
+                    "/approve `<chat_id>`\\.\n\n"
+                    "Use the menu below to navigate\\.",
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=self.main_menu,
+                )
+                return
+            await update.message.reply_text(
+                "🤖 *Vilona AI v2*\n\n"
+                "Registration received\\.\n\n"
+                "⚠️ *Pending approval* — an admin must approve your access "
+                "before you can use the bot\\.\n"
+                f"Your chat ID: `{chat_id}`\n\n"
+                "Try /start again after approval\\.",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+            return
+
+        if not session.approved:
+            await update.message.reply_text(
+                "⚠️ *Pending approval*\n\n"
+                "Your registration is awaiting admin approval\\.\n"
+                f"Your chat ID: `{chat_id}`",
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
             return
 
         text = (
             f"🤖 *Vilona AI v2* is online\\.\n\n"
-            f"Welcome back\\! Use the menu below to navigate:\n"
+            f"Welcome back{(', ' + escape_md_v2(session.first_name)) if session.first_name else ''}\\! "
+            f"Use the menu below to navigate:\n"
             f"• *Status* \\- Open positions \\& P/L\n"
             f"• *Balance* \\- Account equity\n"
             f"• *Control* \\- Start/Stop scanner\n"
             f"• *Logs* \\- Recent activity\n\n"
-            f"_Env_: `{escape_md_v2(self.config.exchange.name.upper())}` \\| "
+            f"_Env_: `{escape_md_v2(session.exchange_name.upper())}` \\| "
             f"_Mode_: `{escape_md_v2('PAPER' if self._stats['paper_mode'] else 'LIVE')}`"
         )
         await update.message.reply_markdown_v2(text, reply_markup=self.main_menu)
+    async def on_approve(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from ui.auth import is_admin, get_registry
+        registry = get_registry()
+        if not is_admin(update.effective_chat.id):
+            await update.message.reply_text("Admin only")
+            return
+        if not context.args:
+            pending = registry.list_pending()
+            if not pending:
+                await update.message.reply_text("No pending registrations.")
+                return
+            lines = ["Pending registrations:"] + [
+                f"• `{u.chat_id}` — {u.username or u.first_name}" for u in pending
+            ]
+            await update.message.reply_text("\n".join(lines))
+            return
+        try:
+            target = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Usage: /approve <chat_id>")
+            return
+        await update.message.reply_text(
+            f"Approved `{target}`." if registry.approve(target)
+            else f"`{target}` not found."
+        )
+
+    async def on_decline(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from ui.auth import is_admin, get_registry
+        if not is_admin(update.effective_chat.id):
+            await update.message.reply_text("Admin only")
+            return
+        if not context.args:
+            await update.message.reply_text("Usage: /decline <chat_id> (removes registration)")
+            return
+        try:
+            target = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Usage: /decline <chat_id>")
+            return
+        from ui.auth import get_registry
+        removed = get_registry().remove(target)
+        await update.message.reply_text(f"Removed `{target}`." if removed else f"`{target}` not found.")
+
+    async def on_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        from ui.auth import is_admin, get_registry
+        if not is_admin(update.effective_chat.id):
+            await update.message.reply_text("Admin only")
+            return
+        users = get_registry().list_all()
+        if not users:
+            await update.message.reply_text("No registered users.")
+            return
+        lines = ["Registered users:"]
+        for u in users:
+            status = "admin" if u.is_admin else ("active" if u.approved else "pending")
+            lines.append(f"• `{u.chat_id}` — {u.username or u.first_name} [{status}]")
+        await update.message.reply_text("\n".join(lines))
+
+    async def on_setkeys(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Persist per-user exchange credentials: /setkeys <exchange> <api_key> <api_secret>"""
+        from ui.auth import get_registry, get_session
+        chat_id = update.effective_chat.id
+        session = get_session(chat_id)
+        if session is None or not session.approved:
+            await update.message.reply_text("Register and get approved first (/start).")
+            return
+        if not context.args or len(context.args) < 3:
+            await update.message.reply_text(
+                "Usage: /setkeys <exchange> <api_key> <api_secret>\n"
+                "e.g. /setkeys binance YOUR_KEY YOUR_SECRET"
+            )
+            return
+        exchange, key, secret = context.args[0], context.args[1], context.args[2]
+        registry = get_registry()
+        with registry._lock:
+            import sqlite3 as _sq
+            conn = registry._connect()
+            try:
+                conn.execute(
+                    "UPDATE tg_users SET exchange_name=?, exchange_api_key=?, exchange_api_secret=? WHERE chat_id=?",
+                    (exchange, key, secret, chat_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        session.exchange_name = exchange
+        session.exchange_api_key = key
+        session.exchange_api_secret = secret
+        session.bridge = None  # rebuild lazily on next use
+        await update.message.reply_text(
+            f"Credentials saved for `{exchange}`. Your next /balance or /status "
+            f"uses your own account."
+        )
+
+    def _user_bridge(self, chat_id: int):
+        """Per-user CCXT bridge (lazy), falling back to shared bridge when
+        the user hasn't set their own credentials."""
+        from ui.auth import get_session
+        session = get_session(chat_id)
+        if session is None or not session.approved:
+            return self.bridge
+        if session.bridge is not None:
+            return session.bridge
+        if session.exchange_api_key and session.exchange_api_secret:
+            try:
+                from dataclasses import replace as _replace
+                from config import get_config
+                base = get_config().exchange
+                user_cfg = _replace(
+                    base,
+                    name=session.exchange_name,
+                    api_key=session.exchange_api_key,
+                    api_secret=session.exchange_api_secret,
+                    sandbox=session.exchange_sandbox,
+                )
+                from trading.bridge_ccxt import CCXTBridge
+                bridge = CCXTBridge(user_cfg)
+                if bridge.connect():
+                    session.bridge = bridge
+                    logger.info("Built per-user bridge for chat %s (%s)", chat_id, session.exchange_name)
+                    return bridge
+            except Exception as e:
+                logger.error("Per-user bridge failed for %s: %s", chat_id, e)
+        return self.bridge
 
     async def on_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_authorized(update.effective_chat.id):
@@ -83,14 +247,19 @@ class TelegramController:
             return
         text = (
             "Vilona AI commands:\n\n"
-            "/status — positions and daily P/L\n"
+            "/start — register / login\n"
+            "/status — positions and daily P/L (your account)\n"
             "/health — runtime, bridge, database, and error state\n"
             "/events [count] — recent persisted runtime events\n"
-            "/balance — account balance\n"
+            "/balance — account balance (your account)\n"
+            "/setkeys <exchange> <key> <secret> — connect your own exchange\n"
             "/control — interactive runtime controls\n"
             "/start_scan, /stop_scan, /restart_scan — admin controls\n"
             "/emergency_stop [reason] — immediately halt the supervisor\n"
             "/emergency_reset — admin confirmation required\n"
+            "/users — list registered users (admin)\n"
+            "/approve <chat_id> — approve pending registration (admin)\n"
+            "/decline <chat_id> — remove a registration (admin)\n"
             "/logs — recent controller logs"
         )
         await update.message.reply_text(text, reply_markup=self.main_menu)
@@ -207,9 +376,10 @@ class TelegramController:
             await msg.reply_text("⚠️ Unauthorized", reply_markup=self.main_menu)
             return
 
-        positions = self.bridge.get_positions()
+        bridge = self._user_bridge(chat_id)
+        positions = bridge.get_positions()
         symbol = self.config.trading.symbols[0]
-        pl, wins, total = calc_daily_pl(self.bridge, symbol)
+        pl, wins, total = calc_daily_pl(bridge, symbol)
 
         buttons = []
         if positions:
@@ -266,9 +436,10 @@ class TelegramController:
             await msg.reply_text("⚠️ Unauthorized", reply_markup=self.main_menu)
             return
 
-        if hasattr(self.bridge, 'get_balance'):
+        bridge = self._user_bridge(chat_id)
+        if hasattr(bridge, 'get_balance'):
             try:
-                balance = self.bridge.get_balance()
+                balance = bridge.get_balance()
                 total = balance.get('total', 0.0)
                 free = balance.get('free', 0.0)
                 text = (
@@ -281,7 +452,7 @@ class TelegramController:
             await msg.reply_markdown_v2(text, reply_markup=self.main_menu)
         else:
             try:
-                balance = self.bridge.get_balance()
+                balance = bridge.get_balance()
                 text = (
                     f"*💰 Account Balance*\n\n"
                     f"*Balance:* `{balance.get('balance', 0.0):.2f}`\n"
@@ -568,7 +739,10 @@ class TelegramController:
         application.add_handler(CommandHandler('stop_scan', self.on_stop_scan_command))
         application.add_handler(CommandHandler('restart_scan', self.on_restart_scan_command))
         application.add_handler(CommandHandler('emergency_stop', self.on_emergency_stop))
-        application.add_handler(CommandHandler('emergency_reset', self.on_emergency_reset))
+        application.add_handler(CommandHandler('approve', self.on_approve))
+        application.add_handler(CommandHandler('decline', self.on_decline))
+        application.add_handler(CommandHandler('users', self.on_users))
+        application.add_handler(CommandHandler('setkeys', self.on_setkeys))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
         application.add_handler(CallbackQueryHandler(self._cb_query))
 
