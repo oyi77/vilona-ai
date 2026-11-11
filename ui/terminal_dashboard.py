@@ -37,6 +37,21 @@ class TerminalDashboard:
         mode = "LIVE" if not self.config.paper_trading else "PAPER"
         exchange = self.config.exchange.name.upper()
         runtime_state = self.runtime.status().get("state", "ui-only") if self.runtime else "ui-only"
+        guard_text = ""
+        if getattr(self.config.trading, 'news_guard_enabled', False):
+            try:
+                from trading.news_guard import get_zone_status
+                ns = get_zone_status(None, 30, 5)
+                guard_text = f" | News: {ns.zone}"
+            except Exception:
+                pass
+        try:
+            from llm import budget as llm_budget
+            _over, _a, _used, _limit = llm_budget.check('autotrade')
+            if _limit > 0:
+                guard_text += f" | Budget: {_used}/{_limit}"
+        except Exception:
+            pass
         
         # Try to get current P/L if available
         try:
@@ -48,7 +63,7 @@ class TerminalDashboard:
             pnl_text = "P/L: ---"
 
         title = Text("🤖 Vilona AI v2", style="bold magenta")
-        content = Text(f" {mode} | {exchange} | Status: {runtime_state.upper()} | {pnl_text} ", style="white")
+        content = Text(f" {mode} | {exchange} | Status: {runtime_state.upper()}{guard_text} | {pnl_text} ", style="white")
         
         return Panel(
             Align.center(content),

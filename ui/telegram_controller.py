@@ -220,12 +220,28 @@ class TelegramController:
         pnl_str = f"{pl:.2f}"
         pnl_ico = self._profit_icon(pl)
         runtime_state = (self.runtime.status().get("state", "ui-only") if self.runtime else "ui-only")
+        guard_lines = ""
+        if getattr(self.config.trading, 'news_guard_enabled', False):
+            try:
+                from trading.news_guard import get_zone_status
+                ns = get_zone_status(None, 30, 5)
+                guard_lines += f"\\*News Guard:\\* `{escape_md_v2(ns.zone)}`\n"
+            except Exception:
+                guard_lines += "\\*News Guard:\\* `unavailable`\n"
+        try:
+            from llm import budget as llm_budget
+            over,_a,used,limit = llm_budget.check('autotrade')
+            if limit > 0:
+                guard_lines += f"\\*LLM Budget:\\* `{used}/{limit}` {'⚠️ EXCEEDED' if over else 'ok'}\n"
+        except Exception:
+            pass
         text = (
             f"*📊 Trading Status*\n\n"
             f"*Runtime:* `{escape_md_v2(runtime_state)}`\n"
             f"*Positions Open:* `{len(positions)}`\n"
             f"*Daily P/L:* `{pnl_str}` USDT {pnl_ico}\n"
-            f"*Win Rate:* `{wins}/{total}`\n\n"
+            f"*Win Rate:* `{wins}/{total}`\n"
+            f"{guard_lines}\n"
         )
         if positions:
             text += "*Open Trades:*\n"
