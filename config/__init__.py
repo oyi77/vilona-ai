@@ -19,6 +19,7 @@ class ExchangeConfig:
     password: str = ""
     sandbox: bool = False
     rate_limit: int = 1200
+    market_type: str = "spot"
 
 
 @dataclass
@@ -58,7 +59,6 @@ class TradingConfig:
     max_spread_pct_default: float = 0.15
     sl_atr_mult: float = 1.5
     tp_atr_mult: float = 3.0
-    
     min_volume_usd: float = 100.0
     
     be_trigger_atr_mult: float = 1.5
@@ -69,6 +69,8 @@ class TradingConfig:
     max_drift_points: int = 100
     max_drift_candles: int = 12
     drift_timeframe: str = "15m"
+    paper_trading: bool = True
+    max_data_age_seconds: int = 120
 
 
 @dataclass
@@ -96,6 +98,8 @@ class Config:
     
     headless: bool = True
     paper_trading: bool = True
+    autonomy_enabled: bool = False
+    emergency_stop_file: str = "vilona.emergency_stop"
     debug: bool = False
     log_level: str = "INFO"
     
@@ -115,6 +119,7 @@ class Config:
         config.exchange.api_secret = os.getenv("vilona_EXCHANGE_API_SECRET", config.exchange.api_secret)
         config.exchange.password = os.getenv("vilona_EXCHANGE_PASSWORD", config.exchange.password)
         config.exchange.sandbox = os.getenv("vilona_EXCHANGE_SANDBOX", "false").lower() == "true"
+        config.exchange.market_type = os.getenv("vilona_EXCHANGE_MARKET_TYPE", config.exchange.market_type)
         
         config.telegram.bot_token = os.getenv("vilona_TELEGRAM_BOT_TOKEN", config.telegram.bot_token)
         chat_ids_str = os.getenv("vilona_TELEGRAM_CHAT_IDS", "")
@@ -141,9 +146,13 @@ class Config:
         config.trading.scan_interval = int(os.getenv("vilona_SCAN_INTERVAL", str(config.trading.scan_interval)))
         config.trading.max_risk_per_trade_pct = float(os.getenv("vilona_MAX_RISK_PCT", str(config.trading.max_risk_per_trade_pct)))
         config.trading.max_daily_loss_pct = float(os.getenv("vilona_MAX_DAILY_LOSS_PCT", str(config.trading.max_daily_loss_pct)))
-        config.trading.paper_trading = os.getenv("vilona_PAPER_TRADING", "true").lower() == "true"
+        config.trading.max_data_age_seconds = int(os.getenv("vilona_MAX_DATA_AGE_SECONDS", str(config.trading.max_data_age_seconds)))
+        config.paper_trading = os.getenv("vilona_PAPER_TRADING", "true").lower() == "true"
+        config.trading.paper_trading = config.paper_trading
         
         config.headless = os.getenv("vilona_HEADLESS", "true").lower() == "true"
+        config.autonomy_enabled = os.getenv("vilona_AUTONOMY_ENABLED", "false").lower() == "true"
+        config.emergency_stop_file = os.getenv("vilona_EMERGENCY_STOP_FILE", config.emergency_stop_file)
         config.debug = os.getenv("vilona_DEBUG", "false").lower() == "true"
         config.log_level = os.getenv("vilona_LOG_LEVEL", config.log_level)
         
@@ -156,7 +165,75 @@ class Config:
         config.systemone_api_key = os.getenv("vilona_SYSTEMONE_API_KEY", config.systemone_api_key)
         
         return config
+
+    def validate(self) -> List[str]:
+        """Validate configuration and return list of error strings."""
+        errors = []
+
+        if not self.paper_trading:
+            if self.exchange.name.lower() != 'mt5':
+                if not self.exchange.api_key:
+                    errors.append("paper_trading=False requires exchange.api_key")
+                if not self.exchange.api_secret:
+                    errors.append("paper_trading=False requires exchange.api_secret")
+            if not self.telegram.bot_token:
+                errors.append("telegram.bot_token must be non-empty")
+            if not self.telegram.chat_ids:
+                errors.append("telegram.chat_ids must be non-empty list")
+            if not self.llm.api_key:
+                errors.append("llm.api_key must be non-empty")
+
+        if not self.trading.symbols:
+            errors.append("trading.symbols must be non-empty")
+        if self.trading.max_risk_per_trade_pct <= 0 or self.trading.max_risk_per_trade_pct > 10:
+            errors.append("trading.max_risk_per_trade_pct must be > 0 and <= 10")
+        if self.trading.max_daily_loss_pct <= 0 or self.trading.max_daily_loss_pct > 50:
+            errors.append("trading.max_daily_loss_pct must be > 0 and <= 50")
+
+        if not self.enabled_personas:
+            errors.append("enabled_personas must be non-empty")
+        if not 0.0 <= self.trading.min_confidence <= 1.0:
+            errors.append("trading.min_confidence must be between 0 and 1")
+        if self.trading.scan_interval <= 0:
+            errors.append("trading.scan_interval must be greater than 0")
+        if self.telegram.admin_chat_ids and not set(self.telegram.admin_chat_ids).issubset(self.telegram.chat_ids):
+            errors.append("telegram.admin_chat_ids must be a subset of telegram.chat_ids")
+        if self.trading.max_data_age_seconds <= 0:
+            errors.append("trading.max_data_age_seconds must be greater than 0")
+        if self.exchange.market_type not in {"spot", "margin", "swap", "future"}:
+            errors.append("exchange.market_type must be spot, margin, swap, or future")
+
+        return errors
     
+    def to_dataclass(self) -> dict:
+        """Convert Config into a plain dict with typed values and stripped secrets."""
+        import copy
+        safe = copy.deepcopy(self)
+        # Strip secrets
+        safe.exchange.api_key = "***" if safe.exchange.api_key else ""
+        safe.exchange.api_secret = "***" if safe.exchange.api_secret else ""
+        safe.exchange.password = "***" if safe.exchange.password else ""
+        safe.telegram.bot_token = "***" if safe.telegram.bot_token else ""
+        safe.llm.api_key = "***" if safe.llm.api_key else ""
+        safe.systemone_api_key = "***" if safe.systemone_api_key else ""
+
+        # Flatten trading fields for direct consumption
+        d = copy.deepcopy(safe.trading.__dict__)
+        d["exchange"] = copy.deepcopy(safe.exchange.__dict__)
+        d["telegram"] = copy.deepcopy(safe.telegram.__dict__)
+        d["llm"] = copy.deepcopy(safe.llm.__dict__)
+        d["database"] = copy.deepcopy(safe.database.__dict__)
+        d["build"] = copy.deepcopy(safe.build.__dict__)
+        d["headless"] = safe.headless
+        d["paper_trading"] = safe.paper_trading
+        d["debug"] = safe.debug
+        d["log_level"] = safe.log_level
+        d["enabled_personas"] = list(safe.enabled_personas)
+        d["systemone_enabled"] = safe.systemone_enabled
+        d["systemone_endpoint"] = safe.systemone_endpoint
+        d["systemone_api_key"] = safe.systemone_api_key
+        return d
+
     def to_json(self) -> str:
         """Serialize config to JSON (excluding sensitive keys)"""
         import copy
@@ -173,101 +250,7 @@ class Config:
         """Save config to JSON file"""
         with open(path, 'w') as f:
             f.write(self.to_json())
-    
-    def validate(self) -> List[str]:
-        """Validate configuration and return list of errors"""
-        errors = []
-        
-        # Exchange validation
-        if not self.exchange.name:
-            errors.append("Exchange name cannot be empty")
-        
-        if self.exchange.api_key and not self.exchange.api_secret:
-            errors.append("Exchange api_secret required when api_key is set")
-        
-        # Telegram validation (live mode only)
-        if not self.paper_trading:
-            if not self.telegram.bot_token:
-                errors.append("Telegram bot_token required")
-            
-            if not self.telegram.chat_ids:
-                errors.append("Telegram chat_id required")
-            
-            # LLM validation (live mode only)
-            if not self.llm.api_key:
-                errors.append("LLM api_key required")
-            
-            # Live mode exchange: require api_key + api_secret if not mt5
-            if self.exchange.name.lower() != "mt5":
-                if not self.exchange.api_key:
-                    errors.append("Exchange api_key required for live trading")
-                if not self.exchange.api_secret:
-                    errors.append("Exchange api_secret required for live trading")
-        
-        # Numeric range checks (unconditional)
-        if self.trading.max_risk_per_trade_pct <= 0 or self.trading.max_risk_per_trade_pct > 100:
-            errors.append("max_risk_per_trade_pct must be > 0 and <= 100")
-        
-        if self.trading.max_daily_loss_pct <= 0 or self.trading.max_daily_loss_pct > 100:
-            errors.append("max_daily_loss_pct must be > 0 and <= 100")
-        
-        if self.trading.max_concurrent_positions <= 0:
-            errors.append("max_concurrent_positions must be > 0")
-        
-        if self.trading.max_spread_pct <= 0:
-            errors.append("max_spread_pct must be > 0")
-        
-        if self.trading.min_confidence <= 0 or self.trading.min_confidence > 1:
-            errors.append("min_confidence must be > 0 and <= 1")
-        
-        if self.trading.max_spread_pct_default <= 0:
-            errors.append("max_spread_pct_default must be > 0")
-        
-        if self.trading.sl_atr_mult <= 0:
-            errors.append("sl_atr_mult must be > 0")
-        
-        if self.trading.tp_atr_mult <= 0:
-            errors.append("tp_atr_mult must be > 0")
-        
-        if self.trading.min_volume_usd < 0:
-            errors.append("min_volume_usd must be >= 0")
-        
-        if self.trading.trailing_atr_mult <= 0:
-            errors.append("trailing_atr_mult must be > 0")
-        
-        if self.trading.trailing_step_atr_mult <= 0:
-            errors.append("trailing_step_atr_mult must be > 0")
-        
-        # Database validation
-        if not self.database.path:
-            errors.append("database.path cannot be empty")
-        
-        return errors
 
-    
-    def validate_extended(self) -> List[str]:
-        """Additional validate() contract for risk_manager and test_integration"""
-        errors = []
-        if not self.paper_trading and self.exchange.name != "mt5":
-            if not self.exchange.api_key or not self.exchange.api_secret:
-                errors.append("exchange api_key/api_secret required when paper_trading=False and exchange != mt5")
-        if not self.telegram.bot_token:
-            errors.append("telegram.bot_token is required")
-        if not self.telegram.chat_ids:
-            errors.append("telegram.chat_ids is required")
-        if not self.trading.symbols:
-            errors.append("trading.symbols is required")
-        if not (0 < self.trading.max_risk_per_trade_pct <= 10):
-            errors.append("max_risk_per_trade_pct must > 0 <= 10")
-        if not (0 < self.trading.max_daily_loss_pct <= 50):
-            errors.append("max_daily_loss_pct must > 0 <= 50")
-        if not (0 <= self.trading.min_confidence <= 1):
-            errors.append("min_confidence must be 0 <= value <= 1")
-        if self.trading.scan_interval <= 0:
-            errors.append("scan_interval must be > 0")
-        if self.telegram.admin_chat_ids and not set(self.telegram.admin_chat_ids).issubset(set(self.telegram.chat_ids)):
-            errors.append("telegram.admin_chat_ids must be a subset of telegram.chat_ids")
-        return errors
 
 _config: Optional[Config] = None
 
