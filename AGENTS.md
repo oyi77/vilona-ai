@@ -4,14 +4,19 @@ Auto-loaded by Claude Code and similar tools. Keep accurate.
 
 ## Project overview
 
-Vilona AI is a **crypto/forex trading control platform** with two interacting parts:
+Vilona AI is a **crypto/forex trading control platform** with three parts sharing
+one central relay:
 
-1. **Python backend** (`/`) — `app_server.py` bridges CCXT/MT5, runs a FastAPI
-   trading API on `:8300`, starts a polling Telegram bot, and manages a Rich TUI
-   dashboard.
-2. **Serverless Telegram bot** (`tgcloud-bot/`) — runs on Telegram's V8 isolate
-   platform; registers users, stores exchange credentials, proxies `/status` and
-   `/balance` to the Python backend via `OUTBOUND_URL`.
+1. **Central relay** (`license_server.py`) — holds licenses, device registry,
+   command queue, and events. Single SQLite DB, serves `X-Relay-Token` (bot)
+   and Bearer (device) auth.
+2. **Python backend / desktop binary** (`app_server.py` + `client/client.py`) —
+   bridges CCXT/MT5, hosts an embedded `RelayClient` (outbound only) that polls
+   for commands and reports state. Also runs a FastAPI trading API on `:8300`,
+   a polling Telegram bot, and a Rich TUI dashboard.
+3. **Serverless Telegram bot** (`tgcloud-bot/`) — master-control UI. Registers
+   users, pairs devices, and routes `/status`, `/balance`, and runtime commands
+   through the relay queue.
 
 ## Bot identity
 
