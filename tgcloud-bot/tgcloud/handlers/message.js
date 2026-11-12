@@ -57,6 +57,33 @@ async function relay(method, path, body) {
   return data ?? {};
 }
 
+// ---- Central relay (control plane) -------------------------------------
+// Desktop binaries phone home to RELAY_URL; this bot drives them through the
+// same server. Server-to-server auth uses RELAY_BOT_TOKEN (env, secret).
+const RELAY_URL = (process.env.RELAY_URL || '').replace(/\/+$/, '');
+const RELAY_BOT_TOKEN = process.env.RELAY_BOT_TOKEN || '';
+
+function relayReady() {
+  return !!(RELAY_URL && RELAY_BOT_TOKEN);
+}
+
+async function relay(method, path, body) {
+  const opts = { method, headers: { 'X-Relay-Token': RELAY_BOT_TOKEN } };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${RELAY_URL}${path}`, opts);
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { /* non-json */ }
+  if (!res.ok) {
+    const detail = data?.detail || text.slice(0, 200);
+    throw new Error(`relay ${method} ${path} -> ${res.status}: ${detail}`);
+  }
+  return data ?? {};
+}
+
 async function getRow(chatId) {
   const rows = await db.select().from(users).where(eq(users.chatId, chatId)).all();
   return rows[0] ?? null;
