@@ -4,7 +4,7 @@
 // outbound desktop client. See README "Multi-tenancy architecture".
 import { api, db } from 'sdk';
 import { eq, and } from 'sdk/db';
-import { users } from '../schema.js';
+import { users, settings } from '../schema.js';
 
 const HELP = `Vilona AI commands:
 
@@ -15,6 +15,7 @@ const HELP = `Vilona AI commands:
 /balance — account balance (async, from your desktop)
 /setkeys — configure exchange keys LOCALLY in the desktop app
 /pair <name> — generate a pairing token for a desktop client
+/setup_relay <url> <token> — admin: set central relay
 /help — this message
 Runtime (your desktop must be online):
 /start_scan — start trading engine
@@ -32,48 +33,34 @@ function esc(s) {
 
 // ---- Central relay (control plane) -------------------------------------
 // Desktop binaries phone home to RELAY_URL; this bot drives them through the
-// same server. Server-to-server auth uses RELAY_BOT_TOKEN (env, secret).
-const RELAY_URL = (process.env.RELAY_URL || '').replace(/\/+$/, '');
-const RELAY_BOT_TOKEN = process.env.RELAY_BOT_TOKEN || '';
+// same server. Server-to-server auth uses RELAY_BOT_TOKEN.
+// Values are stored in the `settings` table because TGCloud's V8 isolate has
+// no `process.env`. Admin sets them once via `/setup_relay <url> <token>`.
 
-function relayReady() {
-  return !!(RELAY_URL && RELAY_BOT_TOKEN);
+const SETTING_KEYS = { url: 'relay_url', token: 'relay_bot_token' };
+
+async function loadRelayConfig() {
+  const rows = await db.select().from(settings).all();
+  const map = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  return {
+    url: (map[SETTING_KEYS.url] || '').replace(/\/+$/, ''),
+    token: map[SETTING_KEYS.token] || '',
+  };
+}
+
+async function relayReady() {
+  const { url, token } = await loadRelayConfig();
+  return !!(url && token);
 }
 
 async function relay(method, path, body) {
-  const opts = { method, headers: { 'X-Relay-Token': RELAY_BOT_TOKEN } };
+  const { url, token } = await loadRelayConfig();
+  const opts = { method, headers: { 'X-Relay-Token': token } };
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json';
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(`${RELAY_URL}${path}`, opts);
-  const text = await res.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch { /* non-json */ }
-  if (!res.ok) {
-    const detail = data?.detail || text.slice(0, 200);
-    throw new Error(`relay ${method} ${path} -> ${res.status}: ${detail}`);
-  }
-  return data ?? {};
-}
-
-// ---- Central relay (control plane) -------------------------------------
-// Desktop binaries phone home to RELAY_URL; this bot drives them through the
-// same server. Server-to-server auth uses RELAY_BOT_TOKEN (env, secret).
-const RELAY_URL = (process.env.RELAY_URL || '').replace(/\/+$/, '');
-const RELAY_BOT_TOKEN = process.env.RELAY_BOT_TOKEN || '';
-
-function relayReady() {
-  return !!(RELAY_URL && RELAY_BOT_TOKEN);
-}
-
-async function relay(method, path, body) {
-  const opts = { method, headers: { 'X-Relay-Token': RELAY_BOT_TOKEN } };
-  if (body !== undefined) {
-    opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
-  }
-  const res = await fetch(`${RELAY_URL}${path}`, opts);
+  const res = await fetch(`${url}${path}`, opts);
   const text = await res.text();
   let data = null;
   try { data = JSON.parse(text); } catch { /* non-json */ }
@@ -219,9 +206,25 @@ export default async function (message, ctx) {
     return;
   }
 
+  // ---------- admin: configure central relay (stored in DB, no env needed) --
+  if (cmd === 'setup_relay') {
+    if (!isAdmin) { await api.sendMessage({ chat_id: chatId, text: 'Admin only' }); return; }
+    if (args.length < 2) {
+      const { url } = await loadRelayConfig();
+      await api.sendMessage({ chat_id: chatId, text: `Usage: /setup_relay <relay_url> <relay_bot_token>\nCurrent URL: ${url || '(not set)'}` });
+      return;
+    }
+    const url = args[0].replace(/\/+$/, '');
+    const token = args.slice(1).join(' ').trim();
+    await db.insert(settings).values({ key: SETTING_KEYS.url, value: url }).onConflictDoUpdate({ target: settings.key, set: { value: url } }).run();
+    await db.insert(settings).values({ key: SETTING_KEYS.token, value: token }).onConflictDoUpdate({ target: settings.key, set: { value: token } }).run();
+    await api.sendMessage({ chat_id: chatId, text: `Relay configured: ${url}` });
+    return;
+  }
+
   // ---------- device pairing (any approved user) ----------
   if (cmd === 'pair') {
-    if (!relayReady()) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
+    if (!(await relayReady())) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
     const name = args.join(' ').slice(0, 64) || 'desktop';
     try {
       const d = await relay('POST', '/relay/pair', { chat_id: chatId, name });
@@ -238,7 +241,7 @@ export default async function (message, ctx) {
   }
 
   if (cmd === 'devices' || cmd === 'license') {
-    if (!relayReady()) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
+    if (!(await relayReady())) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
     try {
       const st = await relay('GET', `/relay/status/${chatId}`);
       const devs = st.devices || [];
@@ -266,7 +269,7 @@ export default async function (message, ctx) {
   };
   if (OP_BY_CMD[cmd]) {
     if ((cmd === 'emergency_reset') && !isAdmin) { await api.sendMessage({ chat_id: chatId, text: 'Admin only' }); return; }
-    if (!relayReady()) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
+    if (!(await relayReady())) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
     const opArgs = cmd === 'emergency_stop' ? { reason: args.join(' ') || 'emergency stop from Telegram' } : {};
     try {
       const r = await relay('POST', '/relay/command', { chat_id: chatId, op: OP_BY_CMD[cmd], args: opArgs });

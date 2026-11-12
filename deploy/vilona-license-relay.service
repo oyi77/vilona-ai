@@ -1,0 +1,16 @@
+[Unit]
+Description=Vilona relay + license server (license_server.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+WorkingDirectory=/home/openclaw/projects/vilona-ai
+EnvironmentFile=/home/openclaw/projects/vilona-ai/.env.local
+ExecStart=/usr/bin/python3 -u license_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

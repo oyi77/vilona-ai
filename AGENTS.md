@@ -22,8 +22,12 @@ one central relay:
 
 | Name | Username |
 |------|----------|
-| BK-Trade Bot | `@agent_1ai2_bot` |
+| Vilona AI Bot | `@agent_1ai2_bot` |
 
+- **Telegram name:** Vilona AI Bot
+- **Telegram username:** `@agent_1ai2_bot`
+- **Short description:** `Vilona AI Bot — multiserver telegram engine`
+- **Long description:** `Vilona AI Bot — central control plane for the Vilona AI trading ecosystem. Register, pair your desktop/VPS device, manage licenses and control your trading engine from Telegram.`
 - Bot tokens live in `.env` (gitignored) as `vilona_TELEGRAM_BOT_TOKEN` and
   `TGCLOUD_TOKEN`. Never commit them.
 - Ask the maintainer for the current values.

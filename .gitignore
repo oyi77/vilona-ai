@@ -36,3 +36,6 @@ logs/
 *.db-shm
 *.db-wal
 install_script.iss
+
+# local-only secrets overlay
+.env.local

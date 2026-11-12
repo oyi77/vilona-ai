@@ -13,3 +13,10 @@ export const users = table('users', {
   exchangeApiSecret: text('exchange_api_secret').default(''),
   exchangeSandbox: boolean('exchange_sandbox').default(false),
 });
+
+// Central relay config (stored in DB because TGCloud V8 has no `process.env`).
+// Admin sets this once via `/setup_relay <url> <token>`; every handler reads it.
+export const settings = table('settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+});

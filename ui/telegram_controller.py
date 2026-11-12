@@ -1,6 +1,7 @@
 # Telegram UX layer for Vilona AI v2 - Rich Command Center
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -753,7 +754,16 @@ class TelegramController:
         self.running = True
         app = ApplicationBuilder().token(self.bot_token).build()
         self.register_commands(app)
-        app.run_polling()
+        self._app = app
+        asyncio.run(app.run_polling())
+
+    def stop(self):
+        if self._app:
+            try:
+                asyncio.run(self._app.stop())
+            except RuntimeError:
+                pass
+        self.running = False
 
     def send_message(self, chat_id: int, text: str):
         if not self.bot_token or chat_id == 0:
