@@ -20,17 +20,19 @@ one central relay:
 
 ## Bot identity
 
-| Name | Username | Token |
-|------|----------|-------|
-| BK-Trade Bot | `@agent_1ai2_bot` | `[REDACTED]:[REDACTED]` |
+| Name | Username |
+|------|----------|
+| BK-Trade Bot | `@agent_1ai2_bot` |
 
-- Polling bot (Python): `vilona_TELEGRAM_BOT_TOKEN` in `.env`.
-- Serverless bot: `TGCLOUD_TOKEN` in `tgcloud-bot/.env`; format `app<id>:<secret>`.
+- Bot tokens live in `.env` (gitignored) as `vilona_TELEGRAM_BOT_TOKEN` and
+  `TGCLOUD_TOKEN`. Never commit them.
+- Ask the maintainer for the current values.
 
 ## Default admin
 
-**Chat ID `[REDACTED]`** (`@[REDACTED]`) is the primary admin on the serverless
-bot. The Python backend uses config-based `vilona_TELEGRAM_ADMIN_IDS`.
+The serverless bot's first registrant is auto-approved as admin. The Python
+backend uses config-based `vilona_TELEGRAM_ADMIN_IDS` (set in `.env`). Do not
+hardcode admin chat IDs here.
 
 ## Quick reference
 
@@ -91,11 +93,15 @@ python -m pytest tests/ -q
 ## E2E testing
 
 ```bash
-export TELETHON_SESSION="$HOME/.telethon_session/[REDACTED].session"
-export TELEGRAM_API_ID="[REDACTED]"
-export TELEGRAM_API_HASH="[REDACTED]"
+export TELETHON_SESSION="$HOME/.telethon_session/<session-file>.session"
+export TELEGRAM_API_ID="<api-id>"
+export TELEGRAM_API_HASH="<api-hash>"
 export TELETHON_BOT_USERNAME="agent_1ai2_bot"
 python test_live_bot.py   # or any telethon-based test
 ```
 
 Flow: `/start` → pending → admin `/approve <chat_id>` → approved commands work.
+
+> **SECURITY:** Never commit bot tokens, API keys, Telethon sessions, admin chat
+> IDs, or pairing tokens. They belong in `.env` / gitignored local files only.
+> Rotate any credential that was previously exposed in the repository history.

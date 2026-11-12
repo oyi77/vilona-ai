@@ -32,7 +32,7 @@ TGCLOUD_TOKEN="${TGCLOUD_TOKEN:-$(grep TGCLOUD_TOKEN .env 2>/dev/null | cut -d= 
 echo
 cd ..
 
-echo "--- 4. Live Telegram test via Telethon (@[REDACTED] -> @agent_1ai2_bot) ---"
+echo "--- 4. Live Telegram test via Telethon -> @agent_1ai2_bot ---"
 timeout 60 python test_live_bot.py 2>&1 | head -25 || true
 echo
 
