@@ -359,8 +359,7 @@ def poll(request: Request):
         # Lease only this device's pending commands (enqueue already targeted device_id)
         conn.execute(
             "UPDATE commands SET status='leased', lease_until=? "
-            "WHERE status='pending' AND device_id=? "
-            "ORDER BY created_at LIMIT ?",
+            "WHERE id IN (SELECT id FROM commands WHERE status='pending' AND device_id=? ORDER BY created_at LIMIT ?)",
             (lease_exp, did, MAX_BATCH),
         )
         rows = conn.execute(
