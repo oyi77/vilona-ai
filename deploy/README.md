@@ -21,12 +21,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now vilona-license-relay
 
 # 3. Route public traffic (1ai-cf-router)
-sudo cp deploy/nginx-app_relay.conf /home/openclaw/.cloudflare-router/nginx/sites/app_relay.conf
+sudo cp deploy/nginx-app_vilona-relay.conf /home/openclaw/.cloudflare-router/nginx/sites/app_vilona-relay.conf
 sudo tee -a /home/openclaw/.cloudflare-router/nginx/sites-active.conf \
-  <<< "include /home/openclaw/.cloudflare-router/nginx/sites/app_relay.conf;"
+  <<< "include /home/openclaw/.cloudflare-router/nginx/sites/app_vilona-relay.conf;"
 
 # 4. Add DNS hostname in the cloudflared tunnel config (see /etc/cloudflared/config.yml)
-#    - hostname: relay.aitradepulse.com
+#    - hostname: vilona-relay.aitradepulse.com
 #      service: http://localhost:6969
 
 # 5. Reload
@@ -37,7 +37,7 @@ sudo systemctl restart cloudflared
 Then verify:
 
 ```bash
-curl https://relay.aitradepulse.com/healthz
+curl https://vilona-relay.aitradepulse.com/healthz
 ```
 
 Should return `{"ok": true, "count": N}`.
@@ -50,6 +50,6 @@ Edit `.env.local`, `sudo systemctl restart vilona-license-relay`.
 
 ```bash
 sudo systemctl stop vilona-license-relay
-sudo rm /home/openclaw/.cloudflare-router/nginx/sites/app_relay.conf
+sudo rm /home/openclaw/.cloudflare-router/nginx/sites/app_vilona-relay.conf
 sudo systemctl reload nginx
 ```
