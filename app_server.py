@@ -141,6 +141,66 @@ def main():
     if cfg.autonomy_enabled:
         runtime.start()
 
+    # 3. Outbound relay client (desktop binary phones home to the central
+    #    control plane). Only starts when RELAY_URL + DEVICE_TOKEN are set;
+    #    never blocks startup or crashes the process if the relay is down.
+    relay_client = None
+    _relay_url = os.getenv("vilona_RELAY_URL", "")
+    _relay_tok = os.getenv("vilona_RELAY_DEVICE_TOKEN", "")
+    if _relay_url and _relay_tok:
+        try:
+            from client.client import RelayClient
+
+            def _exec_relay_command(op: str, args: dict):
+                if op == "status":
+                    st = runtime.status() if runtime else {}
+                    pos = []
+                    try:
+                        pos = [{"ticket": p.ticket, "symbol": p.symbol, "type": str(p.type)}
+                               for p in bridge.get_positions()][:10]
+                    except Exception:
+                        pass
+                    return {"state": st.get("state", "idle"), "paper": cfg.paper_trading,
+                            "positions": pos}
+                if op == "balance":
+                    bal = bridge.get_balance()
+                    return {"total": round(bal.get("total", bal.get("equity", 0.0)), 2),
+                            "free": round(bal.get("free", 0.0), 2)}
+                if op == "positions":
+                    try:
+                        return [{"ticket": p.ticket, "symbol": p.symbol, "type": str(p.type)}
+                                for p in bridge.get_positions()]
+                    except Exception as e:
+                        raise RuntimeError(str(e))
+                if op == "runtime.start":
+                    return {"started": runtime.start() if runtime else False}
+                if op == "runtime.stop":
+                    return {"stopped": runtime.stop() if runtime else False}
+                if op == "runtime.emergency_stop":
+                    reason = str((args or {}).get("reason") or "emergency stop from relay")
+                    runtime.emergency_stop(reason)
+                    return {"emergency_stopped": True}
+                if op == "runtime.emergency_reset":
+                    runtime.reset_emergency_stop()
+                    return {"reset": True}
+                raise ValueError(f"unknown op: {op}")
+
+            def _account_login():
+                try:
+                    return str(getattr(bridge, "account_label", lambda: "")()) or ""
+                except Exception:
+                    return ""
+
+            relay_client = RelayClient(_relay_url, _relay_tok, _exec_relay_command,
+                                        get_account_login=_account_login)
+            relay_client.start()
+            logger.info("Relay client started (outbound) -> %s", _relay_url)
+        except Exception as e:
+            logger.error("Relay client init failed (non-fatal): %s", e)
+            relay_client = None
+    else:
+        logger.info("vilona_RELAY_URL / vilona_RELAY_DEVICE_TOKEN not set — relay client skipped")
+
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
     # Headless/paper mode: UI failures are non-fatal. Only set shutdown_event
@@ -197,6 +257,11 @@ def main():
     finally:
         # Clean shutdown sequence
         logger.info("Initiating clean shutdown...")
+        if relay_client:
+            try:
+                relay_client.stop()
+            except Exception as e:
+                logger.error(f"Error stopping relay client: {e}")
         if dash_thread and dash.running:
             try:
                 dash.stop()

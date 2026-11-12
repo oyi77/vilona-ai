@@ -1,6 +1,7 @@
 // handlers/message.js — Vilona AI v2 command router (runs on Telegram infra).
-// Registration + admin flow lives here; trading data is proxied to the Python
-// backend (OUTBOUND_URL, see README section "Trading backend").
+// Registration + admin flow lives here; trading/runtime commands are routed
+// through the central relay (RELAY_URL + RELAY_BOT_TOKEN env) to the user's
+// outbound desktop client. See README "Multi-tenancy architecture".
 import { api, db } from 'sdk';
 import { eq, and } from 'sdk/db';
 import { users } from '../schema.js';
@@ -8,10 +9,18 @@ import { users } from '../schema.js';
 const HELP = `Vilona AI commands:
 
 /start — register / login
-/status — positions and daily P/L (your account)
-/balance — account balance (your account)
-/setkeys <exchange> <key> <secret> — connect your own exchange
+/devices — your paired desktop clients + status
+/license — license status of your devices
+/status — positions and daily P/L (async, from your desktop)
+/balance — account balance (async, from your desktop)
+/setkeys — configure exchange keys LOCALLY in the desktop app
+/pair <name> — generate a pairing token for a desktop client
 /help — this message
+Runtime (your desktop must be online):
+/start_scan — start trading engine
+/stop_scan — stop trading engine
+/emergency_stop — immediately halt
+/emergency_reset — admin confirmation required
 Approval (admin):
 /users — list registered users
 /approve <chat_id> — approve pending registration
@@ -19,6 +28,33 @@ Approval (admin):
 
 function esc(s) {
   return String(s ?? '').replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+// ---- Central relay (control plane) -------------------------------------
+// Desktop binaries phone home to RELAY_URL; this bot drives them through the
+// same server. Server-to-server auth uses RELAY_BOT_TOKEN (env, secret).
+const RELAY_URL = (process.env.RELAY_URL || '').replace(/\/+$/, '');
+const RELAY_BOT_TOKEN = process.env.RELAY_BOT_TOKEN || '';
+
+function relayReady() {
+  return !!(RELAY_URL && RELAY_BOT_TOKEN);
+}
+
+async function relay(method, path, body) {
+  const opts = { method, headers: { 'X-Relay-Token': RELAY_BOT_TOKEN } };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(`${RELAY_URL}${path}`, opts);
+  const text = await res.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch { /* non-json */ }
+  if (!res.ok) {
+    const detail = data?.detail || text.slice(0, 200);
+    throw new Error(`relay ${method} ${path} -> ${res.status}: ${detail}`);
+  }
+  return data ?? {};
 }
 
 async function getRow(chatId) {
@@ -136,45 +172,86 @@ export default async function (message, ctx) {
   }
 
   // ---------- per-user exchange credentials ----------
+  // Under the relay model, MT5/exchange keys live ONLY on the user's desktop
+  // binary. Never accept or store secrets in chat/cloud.
   if (cmd === 'setkeys') {
-    if (args.length < 3) {
-      await api.sendMessage({ chat_id: chatId, text: 'Usage: /setkeys <exchange> <api_key> <api_secret>' });
-      return;
-    }
-    await db.update(users).set({
-      exchangeName: args[0], exchangeApiKey: args[1], exchangeApiSecret: args[2],
-    }).where(eq(users.chatId, chatId)).run();
-    await api.sendMessage({ chat_id: chatId, text: `Credentials saved for ${args[0]}.` });
+    await api.sendMessage({
+      chat_id: chatId,
+      text: 'Exchange/API keys are configured locally in the Vilona desktop app '
+          + '(Settings → Account). They are never sent through Telegram or stored on the server.',
+    });
     return;
   }
 
   if (cmd === 'setbackend') {
-    if (!isAdmin) { await api.sendMessage({ chat_id: chatId, text: 'Admin only' }); return; }
-    if (!args[0]) {
-      const row = await getRow(chatId);
-      await api.sendMessage({ chat_id: chatId, text: `Backend URL: ${row?.outBoundUrl || '(not set)'}` });
-      return;
-    }
-    await db.update(users).set({ outBoundUrl: args[0] }).where(eq(users.chatId, chatId)).run();
-    await api.sendMessage({ chat_id: chatId, text: `Backend URL set to: ${args[0]}` });
+    await api.sendMessage({
+      chat_id: chatId,
+      text: 'Not needed — the desktop app connects outbound to the central relay automatically. '
+          + 'Pair a device with /pair <name>.',
+    });
     return;
   }
 
-  // trading commands proxy to Python backend (per-user URL, else env)
-  const backend = user.outBoundUrl || process.env.OUTBOUND_URL;
-  if (backend && (cmd === 'balance' || cmd === 'status')) {
+  // ---------- device pairing (any approved user) ----------
+  if (cmd === 'pair') {
+    if (!relayReady()) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
+    const name = args.join(' ').slice(0, 64) || 'desktop';
     try {
-      const resp = await fetch(`${backend}/api/${cmd === 'status' ? 'status' : 'balance'}?chat_id=${chatId}`, {
-        headers: { 'X-User-Key': String(chatId) },
-      });
-      const data = await resp.json();
+      const d = await relay('POST', '/relay/pair', { chat_id: chatId, name });
       await api.sendMessage({
         chat_id: chatId, parse_mode: 'MarkdownV2',
-        text: `*${cmd === 'status' ? '📊 Status' : '💰 Balance'}*\n\n` +
-              Object.entries(data).map(([k, v]) => `*${esc(k)}:* \`${esc(String(v))}\``).join('\n'),
+        text: `Pairing token for *${esc(name)}*:\n\`\`\`${d.token}\`\`\`\n\n`
+            + `⚠️ *Shown once — keep it secret.* Put it in the desktop app config `
+            + `(\`vilona_RELAY_DEVICE_TOKEN\`) and restart it.`,
       });
     } catch (e) {
-      await api.sendMessage({ chat_id: chatId, text: `Backend unreachable: ${e.message}` });
+      await api.sendMessage({ chat_id: chatId, text: `Pair failed: ${e.message}` });
+    }
+    return;
+  }
+
+  if (cmd === 'devices' || cmd === 'license') {
+    if (!relayReady()) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
+    try {
+      const st = await relay('GET', `/relay/status/${chatId}`);
+      const devs = st.devices || [];
+      if (!devs.length) { await api.sendMessage({ chat_id: chatId, text: 'No devices paired. Use /pair <name>.' }); return; }
+      const lines = devs.map(d => {
+        const seen = d.last_seen ? d.last_seen.replace('T', ' ').slice(0, 19) : 'never';
+        return `• ${d.name || d.device_id.slice(0, 8)} — ${d.license_status} — last seen ${seen}`;
+      });
+      if (cmd === 'license') {
+        await api.sendMessage({ chat_id: chatId, text: `Licenses:\n${lines.join('\n')}` });
+      } else {
+        await api.sendMessage({ chat_id: chatId, text: `Devices (${devs.length}):\n${lines.join('\n')}\nPending commands: ${st.pending_commands ?? 0}` });
+      }
+    } catch (e) {
+      await api.sendMessage({ chat_id: chatId, text: `Status failed: ${e.message}` });
+    }
+    return;
+  }
+
+  // ---------- runtime / trading commands (routed to desktop via relay) ----
+  const OP_BY_CMD = {
+    status: 'status', balance: 'balance',
+    start_scan: 'runtime.start', stop_scan: 'runtime.stop',
+    emergency_stop: 'runtime.emergency_stop', emergency_reset: 'runtime.emergency_reset',
+  };
+  if (OP_BY_CMD[cmd]) {
+    if ((cmd === 'emergency_reset') && !isAdmin) { await api.sendMessage({ chat_id: chatId, text: 'Admin only' }); return; }
+    if (!relayReady()) { await api.sendMessage({ chat_id: chatId, text: 'Relay not configured on server.' }); return; }
+    const opArgs = cmd === 'emergency_stop' ? { reason: args.join(' ') || 'emergency stop from Telegram' } : {};
+    try {
+      const r = await relay('POST', '/relay/command', { chat_id: chatId, op: OP_BY_CMD[cmd], args: opArgs });
+      const label = { status: '📊 Status', balance: '💰 Balance', 'runtime.start': '▶️ Start',
+                      'runtime.stop': '⏹ Stop', 'runtime.emergency_stop': '🛑 Emergency stop',
+                      'runtime.emergency_reset': '🔓 Reset' }[OP_BY_CMD[cmd]] || OP_BY_CMD[cmd];
+      await api.sendMessage({
+        chat_id: chatId,
+        text: `${label} queued for ${(r.command_ids || []).length} device(s). Results appear in /devices shortly — your desktop must be online.`,
+      });
+    } catch (e) {
+      await api.sendMessage({ chat_id: chatId, text: `${cmd} failed: ${e.message}` });
     }
     return;
   }

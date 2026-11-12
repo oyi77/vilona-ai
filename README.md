@@ -82,6 +82,40 @@ Dockerfile                Headless paper-mode container
 docs/UX_DESIGN.md         UX & ops notes
 ```
 
+## Multi-tenancy architecture
+
+Three parts, one source of truth (the central relay DB):
+
+```
+  Telegram user ──► TGCloud bot ──┐        (master-control UI, outbound fetch)
+                                  ▼
+                          Central relay  ◄── license + devices + commands + events
+                                  ▲           (license_server.py, one service)
+  User's desktop binary ──────────┘        (outbound ONLY: poll → execute → report)
+                                          (own MT5/CCXT, own keys, never exposed)
+```
+
+- Every user downloads the desktop binary; it **phones home outbound** to the
+  relay (no inbound ports on the user's machine).
+- The Telegram bot issues commands (`/start_scan`, `/status`, …) which the relay
+  queues per-device; the desktop polls, executes against its **own** MT5, and
+  writes results/state back. Both Telegram and desktop read the same DB, so
+  status stays in sync.
+- Licensing is enforced per MT5 account: `runtime.start` is refused for
+  unlicensed devices at both server and client.
+
+Run the relay (production: behind TLS/reverse proxy):
+
+```bash
+export vilona_RELAY_BOT_TOKEN=<secret>       # bot↔server auth, server-side only
+export vilona_LICENSE_ADMIN_TOKEN=<secret>   # license admin API
+python license_server.py                      # binds :8301, serves /license/* + /relay/*
+```
+
+Pair a desktop client: send `/pair <name>` to the bot, copy the one-time token
+into the desktop app (`vilona_RELAY_DEVICE_TOKEN`), set `vilona_RELAY_URL=https://…`,
+restart the app. The app registers, checks its license, and begins polling.
+
 ## Serverless Telegram bot
 
 The `tgcloud-bot/` sub-project runs on Telegram's serverless platform. Deployed with:
@@ -95,20 +129,30 @@ npx tgcloud migrate  # apply schema changes
 npx tgcloud status   # verify deployment
 ```
 
+Set env on the deployed bot: `RELAY_URL`, `RELAY_BOT_TOKEN` (same value as the
+server's `vilona_RELAY_BOT_TOKEN`).
+
 Commands (`@agent_1ai2_bot`):
 | Command | Who | Description |
 |---------|-----|-------------|
 | `/start` | all | Register / re-login |
 | `/help` | approved | Command reference |
-| `/status` | approved | Positions + daily P&L (proxied to Python backend) |
-| `/balance` | approved | Account balance (proxied to backend) |
-| `/setkeys <ex> <key> <secret>` | approved | Store exchange credentials |
-| `/setbackend <url>` | admin | Set Python backend URL |
+| `/pair <name>` | approved | Generate a one-time desktop pairing token |
+| `/devices` | approved | Paired desktops + license + last-seen |
+| `/license` | approved | License status of your devices |
+| `/status` | approved | Queue a status read (async, from your desktop) |
+| `/balance` | approved | Queue a balance read (async) |
+| `/start_scan` | approved | Start the trading engine on your desktop |
+| `/stop_scan` | approved | Stop the engine |
+| `/emergency_stop` | approved | Immediately halt |
+| `/emergency_reset` | admin | Clear the emergency latch |
+| `/setkeys` | approved | Info: keys are configured locally in the desktop app |
 | `/users` | admin | List registered users |
 | `/approve <chat_id>` | admin | Approve pending registration |
 | `/decline <chat_id>` | admin | Remove pending user |
 
-**First registrant is auto-approved as admin.** Admin sets the Python backend URL via `/setbackend http://your-host:8300` so `/status` and `/balance` can proxy through.
+**First registrant is auto-approved as admin.** Exchange/API keys are never sent
+through Telegram — they live only on the user's desktop binary.
 
 ## Configuration
 

@@ -48,33 +48,40 @@ python -m pytest tests/ -q
 
 | Path | Purpose |
 |------|---------|
-| `app_server.py` | Lifecycle: bridge → FastAPI → Telegram → dashboard |
+| `app_server.py` | Lifecycle: bridge → FastAPI → Telegram → dashboard → relay client |
 | `config/__init__.py` | All `vilona_*` env vars → typed dataclass |
+| `license_server.py` | Self-hosted license server **+ central relay** (devices/commands/events) |
+| `client/client.py` | Desktop relay client (outbound poll → execute → report) |
 | `trading/trade_executor.py` | Order management, SL/TP, position sizing |
 | `trading/news_guard.py` | News event risk gate |
 | `trading/session_guard.py` | Session-hour risk gate |
 | `llm/client.py` | Async LLM with SSE streaming |
 | `llm/endpoints.py` | SSE endpoint definitions |
 | `core/runtime.py` | RuntimeSupervisor — scan loop + event recording |
+| `core/account_license.py` | Per-MT5-account licensing |
 | `ui/user_registry.py` | Multi-user SQLite store |
 | `ui/auth.py` | `is_authorized()`, `is_admin()` helpers |
 | `ui/telegram_controller.py` | Legacy polling Telegram bot |
-| `tgcloud-bot/tgcloud/handlers/message.js` | Serverless command router |
+| `tgcloud-bot/tgcloud/handlers/message.js` | Serverless command router (drives relay) |
 | `tgcloud-bot/tgcloud/schema.js` | Serverless DB schema |
 | `armada/` | Autonomous agent hub + worker + governor |
-| `tests/` | 29 pytest tests (no credentials needed) |
+| `tests/` | pytest suite (37 tests, no credentials needed) |
 
 ## Rules
 
 - **Paper first** — `vilona_PAPER_TRADING=true` is the default. Real trading
   requires explicit opt-in.
-- **No secrets in git** — `.env`, `*.session`, `TGCLOUD_TOKEN`, bot tokens,
-  exchange API keys are all gitignored.
+- **Outbound only** — desktop binaries never listen on a port; they poll the
+  central relay. Production relay MUST sit behind TLS/reverse proxy.
+- **No secrets in git or chat** — `.env`, `*.session`, `TGCLOUD_TOKEN`, bot
+  tokens, exchange API keys are gitignored. Exchange keys live ONLY on the
+  user's desktop; the bot never accepts them in Telegram.
+- **Tenant isolation** — relay scopes every command/event/status query strictly
+  by `chat_id`; device tokens are SHA-256 hashed and returned once at `/pair`.
 - **Serverless bot deploy** — always `push` then `migrate`. Deploy never touches
   the DB; migration is a separate step.
-- **Test before merge** — E2E with `[REDACTED]` Telethon session
-  (`~/.telethon_session/[REDACTED].session`) + API ID `[REDACTED]` / hash
-  `[REDACTED]`.
+- **Test before merge** — E2E with Telethon session + unit/integration tests
+  (`tests/test_relay.py`, `tests/test_relay_client.py`).
 
 ## E2E testing
 

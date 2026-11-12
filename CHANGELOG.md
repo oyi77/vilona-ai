@@ -4,6 +4,41 @@ All notable changes are documented here. Format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-tenancy relay** — one service (`license_server.py`) now hosts both
+  license validation and a central control plane. Desktop binaries connect
+  **outbound only** (no inbound ports): handshake → poll commands → execute
+  locally → report state changes. Telegram bot is the master-control UI driving
+  each user's own desktop instance through the relay.
+  - Tables: `devices`, `commands`, `events` (SQLite, same DB as licenses).
+  - Device tokens stored as SHA-256 hashes, returned once at `/pair`.
+  - Bot↔server auth via `X-Relay-Token` (`vilona_RELAY_BOT_TOKEN`, constant-time);
+    device auth via Bearer token. Strict per-chat tenant scoping.
+  - Command allowlist (no raw order exec in this slice): `status`, `balance`,
+    `positions`, `runtime.start/stop/emergency_stop/emergency_reset`.
+    `runtime.start` blocked for unlicensed devices (server + client).
+  - Event reports allowlisted kinds, payload bounded to 64KB; leases expire and
+    recover.
+- **Desktop relay client** (`client/client.py`) — `RelayClient` polling loop with
+  exponential backoff, injected command callback (never imports MT5/builds a
+  second bridge), outbound-only. Wired into `app_server.py` as a daemon thread,
+  started only when `vilona_RELAY_URL` + `vilona_RELAY_DEVICE_TOKEN` are set;
+  stopped cleanly on shutdown. Non-fatal if relay is unreachable.
+- **TGCloud bot commands** — `/pair <name>` (one-time token), `/devices`,
+  `/license`, and `/status`/`/balance`/`/start_scan`/`/stop_scan`/`/emergency_stop`
+  /`/emergency_reset` routed through the relay (async queue-and-report).
+  `/setkeys` and `/setbackend` retired: exchange keys stay local on the desktop;
+  no secrets accepted in chat.
+- Tests: `tests/test_relay.py` (tenant isolation, token handling, command
+  allowlist, licensing gate, payload bounds) and `tests/test_relay_client.py`
+  (full phone-home roundtrip, unlicensed gate). Suite now 37 passing.
+
+### Changed
+
+- Self-hosted license server replaces the external vendor dependency; client
+  points at `vilona_LICENSE_SERVER_URL`.
+
 ## [v2.3.0] — 2026-11-11
 
 ### Added

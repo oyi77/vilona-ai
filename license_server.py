@@ -1,6 +1,6 @@
 """Self-hosted license server — per-account licenses for Vilona AI clients.
 
-Wire contract (JSON, no auth on check/heartbeat; register requires admin token):
+License wire contract (JSON, no auth on check/heartbeat; register requires admin token):
   GET  /license/check?account=<mt5_login>&ea_name=VilonaAI&version=..&platform=..
       -> "OK" | "UNLICENSED" | "NOT_FOUND"   (plain text, uppercase)
   GET  /license/heartbeat?account=...        -> "OK" | "NOT_FOUND"
@@ -11,6 +11,18 @@ Wire contract (JSON, no auth on check/heartbeat; register requires admin token):
   GET  /license/list?token=ADMIN             -> JSON list of records
   GET  /healthz                             -> {"ok": true, "count": N}
 
+Multi-tenant relay (one service hosts license + relay):
+  Bot API (internal, X-Relay-Token header == vilona_RELAY_BOT_TOKEN, constant-time):
+    POST /relay/pair       {chat_id, name}            -> {device_id, token} (token shown ONCE)
+    POST /relay/command    {chat_id, op, args}        -> enqueue for active devices of chat
+    GET  /relay/status/{chat_id}                      -> own devices + queued counts
+    GET  /relay/events/{chat_id}                      -> recent events, chat-scoped
+  Device API (Bearer <device token>; only SHA-256 hash stored; never returned):
+    POST /relay/handshake  {account_login}            -> license info for the MT5 login
+    POST /relay/poll                            -> lease pending commands (<=10, lease TTL)
+    POST /relay/complete   {command_id, status, result} -> only for commands leased to this device
+    POST /relay/report     {kind, status, data}     -> allowlisted event append, <=64KB
+
 Storage: SQLite at data/licenses.db (created on first run).
 Signing: optional HMAC secret via LICENSE_SIGNING_SECRET to verify tokens.
 """
@@ -18,13 +30,15 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
+import secrets
 import sqlite3
 import threading
-import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 
@@ -37,6 +51,16 @@ DB_PATH = os.getenv(
 
 ADMIN_TOKEN = os.getenv("vilona_LICENSE_ADMIN_TOKEN", "")
 SIGNING_SECRET = os.getenv("vilona_LICENSE_SIGNING_SECRET", "")
+RELAY_BOT_TOKEN = os.getenv("vilona_RELAY_BOT_TOKEN", "")
+
+LEASE_SECONDS = int(os.getenv("vilona_RELAY_LEASE_SECONDS", "120"))
+MAX_BATCH = 10
+MAX_EVENT_BYTES = 64 * 1024
+ALLOWED_EVENT_KINDS = {"EV_ACCOUNT", "EV_ACCT_STATS", "EV_STATUS", "EV_TICK", "EV_LOG",
+                       "EV_STATS", "EV_ORDER", "EV_CLOSED", "EV_GOV", "EV_LICENSE"}
+ALLOWED_COMMAND_OPS = {"status", "balance", "positions",
+                       "runtime.start", "runtime.stop",
+                       "runtime.emergency_stop", "runtime.emergency_reset"}
 
 _lock = threading.Lock()
 
@@ -75,6 +99,41 @@ def _init_db() -> None:
                 ts TEXT NOT NULL,
                 detail TEXT DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS devices (
+                device_id TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                token_hash TEXT UNIQUE NOT NULL,
+                name TEXT,
+                account_login TEXT,
+                license_status TEXT NOT NULL DEFAULT 'unlicensed',
+                last_seen TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                revoked TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_devices_chat_id ON devices(chat_id);
+            CREATE TABLE IF NOT EXISTS commands (
+                id TEXT PRIMARY KEY,
+                device_id TEXT NOT NULL,
+                op TEXT NOT NULL,
+                args JSON NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                lease_until TEXT,
+                completed_at TEXT,
+                result JSON
+            );
+            CREATE INDEX IF NOT EXISTS idx_commands_status ON commands(status);
+            CREATE INDEX IF NOT EXISTS idx_commands_device_id ON commands(device_id);
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                data JSON,
+                ts TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_events_device_id ON events(device_id);
+            CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
         """)
 
 
@@ -213,6 +272,226 @@ def healthz():
     with _lock, _connect() as conn:
         count = int(conn.execute("SELECT COUNT(*) FROM licenses").fetchone()[0])
     return {"ok": True, "count": count}
+
+
+# ── Auth helpers ──────────────────────────────────────────────────
+
+def _require_bot(request: Request) -> None:
+    """X-Relay-Token: internal server-to-server auth (bot or admin UI)."""
+    token = request.headers.get("X-Relay-Token") or ""
+    if not RELAY_BOT_TOKEN or not hmac.compare_digest(str(token), RELAY_BOT_TOKEN):
+        raise HTTPException(status_code=403, detail="invalid relay bot token")
+
+
+def _device_from_bearer(request: Request) -> dict:
+    """Look up a device by Bearer token hash; return dict row."""
+    raw = (request.headers.get("Authorization") or "").split(" ", 1)
+    if len(raw) != 2:
+        raise HTTPException(status_code=401, detail="missing bearer token")
+    token_hash = hashlib.sha256(raw[1].encode()).hexdigest()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM devices WHERE token_hash=? AND revoked IS NULL AND status!='offline'",
+            (token_hash,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=401, detail="invalid or revoked device token")
+        return dict(row)
+
+
+# ── Relay endpoints ───────────────────────────────────────────────
+
+@app.post("/relay/pair")
+def pair(body: dict, request: Request):
+    _require_bot(request)
+    chat_id = int(body.get("chat_id", 0))
+    if chat_id <= 0:
+        raise HTTPException(status_code=400, detail="valid chat_id required")
+    name = str(body.get("name") or "").strip()[:64]
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    device_id = str(uuid.uuid4())
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO devices(device_id, chat_id, token_hash, name, created_at) VALUES (?,?,?,?,?)",
+            (device_id, chat_id, token_hash, name, _now_iso()),
+        )
+    return {"device_id": device_id, "token": raw_token}
+
+
+@app.post("/relay/handshake")
+def handshake(body: dict, request: Request):
+    device = _device_from_bearer(request)
+    account_login = str(body.get("account_login") or "").strip()
+    lic = "unlicensed"
+    if account_login:
+        lic = _check(account_login)
+        if lic != "OK":
+            lic = "unlicensed"
+    device["account_login"] = account_login or device.get("account_login")
+    device["license_status"] = lic
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE devices SET account_login=?, license_status=?, last_seen=? WHERE device_id=?",
+            (account_login, lic, _now_iso(), device["device_id"]),
+        )
+    return {
+        "ok": True,
+        "device_id": device["device_id"],
+        "license": lic,
+        "can_trade": lic == "OK",
+    }
+
+
+@app.post("/relay/poll")
+def poll(request: Request):
+    device = _device_from_bearer(request)
+    did = device["device_id"]
+    now = _now_iso()
+    lease_exp = (datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)).isoformat()
+    # Recover expired leases belonging to THIS device only
+    with _lock, _connect() as conn:
+        conn.execute(
+            "UPDATE commands SET status='pending', lease_until=NULL, completed_at=NULL "
+            "WHERE status='leased' AND device_id=? AND lease_until<?",
+            (did, now),
+        )
+        # Lease only this device's pending commands (enqueue already targeted device_id)
+        conn.execute(
+            "UPDATE commands SET status='leased', lease_until=? "
+            "WHERE status='pending' AND device_id=? "
+            "ORDER BY created_at LIMIT ?",
+            (lease_exp, did, MAX_BATCH),
+        )
+        rows = conn.execute(
+            "SELECT * FROM commands WHERE status='leased' AND device_id=? ORDER BY created_at",
+            (did,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.post("/relay/complete")
+def complete(body: dict, request: Request):
+    device = _device_from_bearer(request)
+    cid = str(body.get("command_id") or "")
+    did = device["device_id"]
+    op = str(body.get("op") or "done")
+    result = body.get("result")
+    if op not in ("done", "error"):
+        raise HTTPException(status_code=400, detail="op must be done or error")
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT status, device_id FROM commands WHERE id=? AND (status='leased' OR status='pending')",
+            (cid,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="command not found or already done")
+        r = dict(row)
+        if r["device_id"] != did:
+            raise HTTPException(status_code=403, detail="command not leased to this device")
+        conn.execute(
+            "UPDATE commands SET status=?, completed_at=?, result=? WHERE id=?",
+            (op, _now_iso(), json.dumps(result) if result else None, cid),
+        )
+    return {"ok": True}
+
+
+@app.post("/relay/report")
+def report(body: dict, request: Request):
+    device = _device_from_bearer(request)
+    did = device["device_id"]
+    kind = str(body.get("kind") or "")
+    if kind not in ALLOWED_EVENT_KINDS:
+        raise HTTPException(status_code=400, detail=f"unknown event kind: {kind}")
+    data = body.get("data")
+    # Bound payload
+    raw = json.dumps(data).encode() if data is not None else b"null"
+    if len(raw) > MAX_EVENT_BYTES:
+        raise HTTPException(status_code=413, detail="event payload too large (max 64KB)")
+    with _lock, _connect() as conn:
+        conn.execute(
+            "INSERT INTO events(device_id, kind, data, ts) VALUES (?,?,?,?)",
+            (did, kind, raw.decode("utf-8", errors="replace"), _now_iso()),
+        )
+        conn.execute(
+            "UPDATE devices SET last_seen=? WHERE device_id=?",
+            (_now_iso(), did),
+        )
+    return {"ok": True}
+
+
+@app.post("/relay/command")
+def relay_command(body: dict, request: Request):
+    _require_bot(request)
+    chat_id = int(body.get("chat_id", 0))
+    if chat_id <= 0:
+        raise HTTPException(status_code=400, detail="valid chat_id required")
+    op = str(body.get("op") or "")
+    if op not in ALLOWED_COMMAND_OPS:
+        raise HTTPException(status_code=400, detail=f"unknown command op: {op}")
+    args = body.get("args") or {}
+    with _lock, _connect() as conn:
+        devices = conn.execute(
+            "SELECT device_id, license_status FROM devices "
+            "WHERE chat_id=? AND revoked IS NULL AND status='active'",
+            (chat_id,),
+        ).fetchall()
+        if not devices:
+            raise HTTPException(status_code=404, detail="no active devices for this user")
+        # runtime.start blocked for unlicensed
+        if op == "runtime.start":
+            licensed = [d for d in devices if d["license_status"] == "OK"]
+            if not licensed:
+                raise HTTPException(
+                    status_code=403,
+                    detail="no licensed devices available to start trading",
+                )
+            devices = licensed
+        cids = []
+        for d in devices:
+            cid = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO commands(id, device_id, op, args, created_at) VALUES (?,?,?,?,?)",
+                (cid, d["device_id"], op, json.dumps(args), _now_iso()),
+            )
+            cids.append(cid)
+    return {"command_ids": cids}
+
+
+@app.get("/relay/status/{chat_id}")
+def relay_status(request: Request, chat_id: int):
+    _require_bot(request)
+    with _lock, _connect() as conn:
+        devs = conn.execute(
+            "SELECT device_id, chat_id, name, account_login, license_status, "
+            "last_seen, status, revoked FROM devices WHERE chat_id=?",
+            (chat_id,),
+        ).fetchall()
+        pending = int(conn.execute(
+            "SELECT COUNT(*) FROM commands c JOIN devices d ON c.device_id=d.device_id "
+            "WHERE d.chat_id=? AND c.status IN ('pending','leased')",
+            (chat_id,),
+        ).fetchone()[0])
+    return {
+        "chat_id": chat_id,
+        "devices": [dict(d) for d in devs],
+        "pending_commands": pending,
+    }
+
+
+@app.get("/relay/events/{chat_id}")
+def relay_events(request: Request, chat_id: int):
+    _require_bot(request)
+    limit = int(request.query_params.get("limit", 50))
+    if limit < 1 or limit > 200:
+        limit = 50
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT e.* FROM events e JOIN devices d ON e.device_id=d.device_id "
+            "WHERE d.chat_id=? ORDER BY e.ts DESC LIMIT ?",
+            (chat_id, limit),
+        ).fetchall()
+    return {"events": [dict(r) for r in rows]}
 
 
 if __name__ == "__main__":
