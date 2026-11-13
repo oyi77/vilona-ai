@@ -467,12 +467,17 @@ class DataRefreshWorker(QThread):
 
 def main():
     app = QApplication(sys.argv); app.setStyle('Fusion')
-    cfg = get_config(); state_db = StateDB()
+    cfg = get_config()
+    state_db = StateDB()
     bridge = MT5Bridge() if cfg.exchange.name.lower() == 'mt5' else CCXTBridge(cfg.exchange)
     if not bridge.connect():
-        print("Failed to connect"); return 1
-    window = VilonaMainWindow(bridge, cfg, state_db); window.show()
+        print("Failed to connect to exchange")
+        return 1
+    if cfg.exchange.name.lower() == 'mt5':
+        # Pull real symbols from broker — config defaults are CCXT format
+        cfg.trading.symbols = bridge.get_available_symbols()
+    window = VilonaMainWindow(bridge, cfg, state_db)
+    window.show()
     return app.exec()
-
 if __name__ == "__main__":
     sys.exit(main())

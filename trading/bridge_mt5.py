@@ -127,6 +127,11 @@ class MT5Bridge:
             "total": equity,
             "free": free_margin,
         }
+    def get_available_symbols(self) -> list[str]:
+        """Return all visible (tradeable) symbols on this broker."""
+        if not self._connected:
+            return []
+        return [s.name for s in (mt5.symbols_get() or []) if s.visible]
 
     # --- Symbol Info ---
     def get_symbol_info(self, symbol: str) -> Optional[SymbolInfo]:
