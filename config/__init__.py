@@ -313,3 +313,9 @@ APP_NAME = 'Vilona AI'
 APP_SLUG = 'vilona-ai'
 APP_VERSION = '2.0.0'
 PROJECT_ROOT = DATA_ROOT
+
+from pathlib import Path as _Path
+ASSETS_DIR = DATA_ROOT / 'assets'
+BRAND_DIR = ASSETS_DIR / 'brand'
+ICONS_DIR = ASSETS_DIR / 'icons'
+UI_DIR = ASSETS_DIR / 'ui'
