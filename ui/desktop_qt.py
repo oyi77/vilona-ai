@@ -55,7 +55,10 @@ class DataRefreshWorker(QThread):
                 data['daily_pl'] = pl
                 data['wins'] = wins
                 data['total'] = total
-                if hasattr(self.bridge, '_exchange') and self.bridge._exchange:
+                if hasattr(self.bridge, 'get_balance'):
+                    bal = self.bridge.get_balance()
+                    data['balance'] = bal.get('total', bal.get('balance', 0.0))
+                elif hasattr(self.bridge, '_exchange') and self.bridge._exchange:
                     bal = self.bridge._exchange.fetch_balance()
                     data['balance'] = bal.get('total', {}).get('USDT', 0.0)
             except Exception as e:
