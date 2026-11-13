@@ -113,16 +113,17 @@ class MT5Bridge:
         """Return account fields used by the UI without leaking MT5 objects."""
         acc = mt5.account_info() if self._connected else None
         if not acc:
-            return {"balance": 0.0, "equity": 0.0, "margin": 0.0, "free_margin": 0.0, "total": 0.0, "free": 0.0}
+            return {"balance": 0.0, "equity": 0.0, "margin": 0.0, "free_margin": 0.0, "total": 0.0, "free": 0.0, "currency": ""}
         balance = float(acc.balance)
         equity = float(acc.equity)
         free_margin = float(acc.margin_free)
+        currency = acc.currency or ''
         return {
             "balance": balance,
             "equity": equity,
             "margin": float(acc.margin),
             "free_margin": free_margin,
-            # Common aliases used by exchange-oriented UI code.
+            "currency": currency,
             "total": equity,
             "free": free_margin,
         }
