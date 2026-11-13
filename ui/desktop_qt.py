@@ -1,8 +1,9 @@
 """Vilona AI v2 - Qt Desktop UI (PyQt6)
 
 Trading control panel with a dark trading-desk design: card layout,
-currency-aware balance display, KPI tiles, positions table, and scanner
-controls. Palette: Catppuccin Mocha-inspired with teal/gold accents.
+currency-aware balance display, KPI tiles with count-up animation,
+positions table, and scanner controls.
+Palette: Catppuccin Mocha-inspired with teal/gold/mauve accents.
 """
 from __future__ import annotations
 
@@ -16,7 +17,11 @@ try:
         QFrame, QGridLayout, QSplitter, QTextEdit, QStatusBar,
         QSystemTrayIcon, QMenu, QStyle, QMessageBox,
     )
-    from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QThread
+    from PyQt6.QtCore import (
+        Qt, QTimer, pyqtSignal, QThread,
+        QPropertyAnimation, QVariantAnimation, QEasingCurve,
+        QAbstractAnimation,
+    )
     from PyQt6.QtGui import QAction, QIcon, QColor, QPalette, QFont
     PYQT6_AVAILABLE = True
 except ImportError:
@@ -29,35 +34,31 @@ from trading.bridge_mt5 import MT5Bridge
 
 
 if not PYQT6_AVAILABLE:
-    raise ImportError("PyQt6 is required for the desktop UI. Install with: pip install PyQt6")
+    raise ImportError("PyQt6 is required. Install with: pip install PyQt6")
 
-# ── Palette ──────────────────────────────────────────────────────────────────
-BG          = "#11111b"
-SURFACE     = "#1e1e2e"
-SURFACE_HI  = "#28283c"
-BORDER      = "#313244"
-TEXT        = "#cdd6f4"
-TEXT_DIM    = "#a6adc8"
-TEXT_MUTE   = "#6c7086"
-GREEN       = "#a6e3a1"
-RED         = "#f38ba8"
-GOLD        = "#f9e2af"
-TEAL        = "#94e2d5"
-MAUVE       = "#cba6f7"
-YELLOW      = "#f5e0dc"  # peach
+# ── Palette ───────────────────────────────────────────────────────────────────
+BG         = "#11111b"
+SURFACE    = "#1e1e2e"
+SURFACE_HI = "#28283c"
+BORDER     = "#313244"
+TEXT       = "#cdd6f4"
+TEXT_DIM   = "#a6adc8"
+TEXT_MUTE  = "#6c7086"
+GREEN      = "#a6e3a1"
+RED        = "#f38ba8"
+GOLD       = "#f9e2af"
+TEAL       = "#94e2d5"
+MAUVE      = "#cba6f7"
+YELLOW     = "#f5e0dc"
 
 
 def _fmt_amount(amount: float, currency: str) -> str:
-    """Currency-aware formatter."""
-    if not currency:
-        return f"{amount:,.2f}"
     symbols = {"USD": "$", "EUR": "€", "GBP": "£", "IDR": "Rp ", "JPY": "¥"}
     sym = symbols.get(currency.upper(), f"{currency.upper()} ")
     return f"{sym}{amount:,.2f}"
 
 
 class _Card(QFrame):
-    """Flat card with subtle border."""
     def __init__(self, title: str = "", parent=None):
         super().__init__(parent)
         self.setStyleSheet(
@@ -68,14 +69,13 @@ class _Card(QFrame):
         self._layout.setContentsMargins(16, 14, 16, 14)
         self._layout.setSpacing(10)
         if title:
-            lbl = QLabel(title)
-            lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px; letter-spacing: 1px;"
-                              "font-weight: 600; text-transform: uppercase;")
+            lbl = QLabel(title.upper())
+            lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 10px;"
+                              "letter-spacing: 1px; font-weight: 600;")
             self._layout.addWidget(lbl)
 
 
 class _KpiTile(QFrame):
-    """Large KPI number in a card."""
     def __init__(self, title: str, value: str = "—", color: str = TEXT, parent=None):
         super().__init__(parent)
         self.setStyleSheet(
@@ -85,22 +85,46 @@ class _KpiTile(QFrame):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(4)
-        self._title = title
         t_lbl = QLabel(title.upper())
-        t_lbl.setStyleSheet(f"color: {TEXT_MUTE}; font-size: 10px; letter-spacing: 1px;"
-                            "font-weight: 600;")
+        t_lbl.setStyleSheet(f"color: {TEXT_MUTE}; font-size: 10px;"
+                            "letter-spacing: 1px; font-weight: 600;")
         lay.addWidget(t_lbl)
         self._value_lbl = QLabel(value)
-        self._value_lbl.setStyleSheet(f"color: {color}; font-size: 22px; font-weight: 700;")
+        self._value_lbl.setStyleSheet(f"color: {color}; font-size: 22px;"
+                                      "font-weight: 700;")
         lay.addWidget(self._value_lbl)
+        self._current = 0.0
+        self._anim: QVariantAnimation | None = None
 
-    def set_value(self, value: str, color: str = TEXT):
-        self._value_lbl.setText(value)
-        self._value_lbl.setStyleSheet(f"color: {color}; font-size: 22px; font-weight: 700;")
+    def animate_number(self, target: float, currency: str = 'USD'):
+        """Count-up animation to target."""
+        if abs(target - self._current) < 0.005:
+            return
+        start = self._current
+        self._current = target
+        self._anim = QVariantAnimation(self)
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(target)
+        self._anim.setDuration(min(600, max(200, int(abs(target - start)))))
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.valueChanged.connect(
+            lambda v: self._value_lbl.setText(_fmt_amount(v, currency))
+        )
+        self._anim.start()
+
+    def set_text(self, text: str, color: str = TEXT):
+        self._value_lbl.setText(text)
+        self._value_lbl.setStyleSheet(f"color: {color}; font-size: 22px;"
+                                      "font-weight: 700;")
+
+    def flash(self, color: str):
+        self._value_lbl.setStyleSheet(f"color: {color}; font-size: 22px;"
+                                      "font-weight: 700;")
+        QTimer.singleShot(400, lambda: self._value_lbl.setStyleSheet(
+            f"color: {TEXT}; font-size: 22px; font-weight: 700;"))
 
 
 class DataRefreshWorker(QThread):
-    """Background worker polling bridge every 2 s."""
     data_ready = pyqtSignal(dict)
 
     def __init__(self, bridge, symbols):
@@ -112,12 +136,9 @@ class DataRefreshWorker(QThread):
     def run(self):
         while self.running:
             data = {
-                'positions': [],
-                'daily_pl': 0.0,
-                'wins': 0,
-                'total': 0,
-                'balance': 0.0,
-                'currency': '',
+                'positions': [], 'daily_pl': 0.0,
+                'wins': 0, 'total': 0,
+                'balance': 0.0, 'currency': '',
             }
             try:
                 data['positions'] = self.bridge.get_positions()
@@ -126,7 +147,8 @@ class DataRefreshWorker(QThread):
                     self.bridge.calculate_daily_pl(sym)
                 if hasattr(self.bridge, 'get_balance'):
                     bal = self.bridge.get_balance()
-                    data['balance'] = bal.get('equity', bal.get('balance', 0.0))
+                    data['balance'] = bal.get('equity',
+                                              bal.get('balance', 0.0))
                     data['currency'] = bal.get('currency', 'USD')
                 elif hasattr(self.bridge, '_exchange') and self.bridge._exchange:
                     bal = self.bridge._exchange.fetch_balance()
@@ -158,8 +180,42 @@ class VilonaMainWindow(QMainWindow):
         self._setup_tray()
         self._apply_styles()
 
+        # Startup stagger animation for KPI tiles
+        self._kpi_tiles = [
+            self.kpi_balance, self.kpi_equity, self.kpi_daily_pl,
+            self.kpi_winrate, self.kpi_positions,
+        ]
+        for i, tile in enumerate(self._kpi_tiles):
+            tile.setWindowOpacity(0.0)
+            self._fade_in(tile, delay_ms=i * 100)
+
+        # Pulse timer for connection dot
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._pulse_dot)
+        self._pulse_timer.start(900)
+        self._pulse_state = False
+
         self.refresh_worker = None
         self._start_refresh()
+
+    def _fade_in(self, widget: QWidget, delay_ms: int = 0):
+        anim = QPropertyAnimation(widget, b"windowOpacity")
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(450)
+        anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        QTimer.singleShot(delay_ms, anim.start)
+        widget._fade_anim = anim  # prevent GC
+
+    def _pulse_dot(self):
+        connected = self.bridge.is_connected()
+        color = GREEN if connected else RED
+        self._pulse_state = not self._pulse_state
+        opacity = 1.0 if self._pulse_state else 0.45
+        self.status_dot.setStyleSheet(
+            f"color: {color}; font-size: 16px; font-weight: 700; "
+            f"opacity: {opacity};"
+        )
 
     # ── UI build ──────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -169,24 +225,24 @@ class VilonaMainWindow(QMainWindow):
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(14)
 
-        # ── KPI row ───────────────────────────────────────────────────────────
+        # KPI row — 5 tiles
         kpi_row = QHBoxLayout()
         kpi_row.setSpacing(14)
-        self.kpi_balance  = _KpiTile("Account Balance", "—", TEAL)
-        self.kpi_equity   = _KpiTile("Equity", "—", TEXT)
-        self.kpi_daily_pl = _KpiTile("Today's P/L", "—", GREEN)
-        self.kpi_winrate  = _KpiTile("Win Rate", "—", MAUVE)
-        self.kpi_positions = _KpiTile("Open Positions", "—", YELLOW)
+        self.kpi_balance   = _KpiTile("Account Balance")
+        self.kpi_equity    = _KpiTile("Equity")
+        self.kpi_daily_pl  = _KpiTile("Today's P/L")
+        self.kpi_winrate   = _KpiTile("Win Rate")
+        self.kpi_positions = _KpiTile("Open Positions")
         for k in (self.kpi_balance, self.kpi_equity, self.kpi_daily_pl,
                   self.kpi_winrate, self.kpi_positions):
             kpi_row.addWidget(k, 1)
         root.addLayout(kpi_row)
 
-        # ── Main split: left (positions + logs) | right (controls) ────────────
+        # Main split
         hsplit = QHBoxLayout()
         hsplit.setSpacing(14)
 
-        # Left: positions table + logs
+        # Left: positions + logs
         left = QVBoxLayout()
         left.setSpacing(14)
 
@@ -204,60 +260,71 @@ class VilonaMainWindow(QMainWindow):
         self.pos_table.setAlternatingRowColors(True)
         self.pos_table.verticalHeader().setVisible(False)
         self.pos_table.setShowGrid(False)
-        self.pos_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.pos_table.setEditTriggers(
+            QTableWidget.EditTrigger.NoEditTriggers
+        )
         pos_card._layout.addWidget(self.pos_table)
         left.addWidget(pos_card, 3)
 
         log_card = _Card("System Log")
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Consolas", 9))
+        self.log_text.setFont(QFont("JetBrains Mono", 9))
         self.log_text.setMinimumHeight(140)
         log_card._layout.addWidget(self.log_text)
         left.addWidget(log_card, 1)
 
         hsplit.addLayout(left, 3)
 
-        # Right: scanner + controls
+        # Right: scanner controls
         right = QVBoxLayout()
         right.setSpacing(14)
 
         scanner_card = _Card("Scanner")
-        scanner_lay = scanner_card._layout
+        sl = scanner_card._layout
+
         self.status_dot = QLabel("● Disconnected")
-        self.status_dot.setStyleSheet(f"color: {RED}; font-size: 15px; font-weight: 700;")
-        scanner_lay.addWidget(self.status_dot)
+        self.status_dot.setStyleSheet(
+            f"color: {RED}; font-size: 16px; font-weight: 700;"
+        )
+        sl.addWidget(self.status_dot)
 
-        self._symbol_label = QLabel(f"Symbol: {', '.join(self.symbols)}")
-        self._symbol_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
-        scanner_lay.addWidget(self._symbol_label)
+        self._symbol_label = QLabel(
+            f"Symbol: {', '.join(self.symbols)}"
+        )
+        self._symbol_label.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 12px;"
+        )
+        sl.addWidget(self._symbol_label)
 
-        spacer = QWidget(); spacer.setFixedHeight(12)
-        scanner_lay.addWidget(spacer)
+        spacer = QWidget()
+        spacer.setFixedHeight(12)
+        sl.addWidget(spacer)
 
         self.btn_start = QPushButton("▶  Start Scanner")
         self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_start.clicked.connect(self.start_scanner)
-        scanner_lay.addWidget(self.btn_start)
+        sl.addWidget(self.btn_start)
 
         self.btn_stop = QPushButton("⏹  Stop Scanner")
         self.btn_stop.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_stop.clicked.connect(self.stop_scanner)
         self.btn_stop.setEnabled(False)
-        scanner_lay.addWidget(self.btn_stop)
+        sl.addWidget(self.btn_stop)
 
         self.btn_close_all = QPushButton("⚠  Close All Positions")
         self.btn_close_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close_all.clicked.connect(self.close_all)
-        scanner_lay.addWidget(self.btn_close_all)
+        sl.addWidget(self.btn_close_all)
 
         right.addWidget(scanner_card)
 
-        # Symbol info card
         info_card = _Card("Market Info")
         self._symbol_info_label = QLabel("—")
         self._symbol_info_label.setWordWrap(True)
-        self._symbol_info_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        self._symbol_info_label.setStyleSheet(
+            f"color: {TEXT_DIM}; font-size: 11px;"
+        )
         info_card._layout.addWidget(self._symbol_info_label)
         right.addWidget(info_card)
 
@@ -266,71 +333,59 @@ class VilonaMainWindow(QMainWindow):
 
         root.addLayout(hsplit, 1)
 
-        # Status bar
         self.statusBar().showMessage("Ready")
 
-    # ── Tray ──────────────────────────────────────────────────────────────────
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self)
         icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
         self.tray.setIcon(icon)
         self.tray.setVisible(True)
         tray_menu = QMenu()
-        show_action = QAction("Show", self);  show_action.triggered.connect(self.show)
-        hide_action = QAction("Hide", self);  hide_action.triggered.connect(self.hide)
-        quit_action = QAction("Quit", self);  quit_action.triggered.connect(self.close)
-        tray_menu.addAction(show_action)
-        tray_menu.addAction(hide_action)
+        show_a = QAction("Show", self);  show_a.triggered.connect(self.show)
+        hide_a = QAction("Hide", self);  hide_a.triggered.connect(self.hide)
+        quit_a = QAction("Quit", self);  quit_a.triggered.connect(self.close)
+        tray_menu.addAction(show_a)
+        tray_menu.addAction(hide_a)
         tray_menu.addSeparator()
-        tray_menu.addAction(quit_action)
+        tray_menu.addAction(quit_a)
         self.tray.setContextMenu(tray_menu)
 
-    # ── Stylesheet ────────────────────────────────────────────────────────────
     def _apply_styles(self):
         self.setStyleSheet(f"""
             QMainWindow {{ background-color: {BG}; }}
             QGroupBox {{
-                color: {TEXT_DIM};
-                font-weight: 600;
-                border: 1px solid {BORDER};
-                border-radius: 10px;
-                margin-top: 10px;
-                padding-top: 10px;
+                color: {TEXT_DIM}; font-weight: 600;
+                border: 1px solid {BORDER}; border-radius: 10px;
+                margin-top: 10px; padding-top: 10px;
             }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; }}
+            QGroupBox::title {{
+                subcontrol-origin: margin; left: 12px; padding: 0 4px;
+            }}
             QTableWidget {{
                 background-color: {SURFACE};
                 alternate-background-color: {SURFACE_HI};
-                color: {TEXT};
-                gridline-color: {BORDER};
-                border: none;
-                border-radius: 6px;
+                color: {TEXT}; gridline-color: {BORDER};
+                border: none; border-radius: 6px;
                 selection-background-color: {MAUVE};
                 selection-color: {BG};
             }}
             QHeaderView::section {{
                 background-color: {SURFACE_HI};
-                color: {TEXT_MUTE};
-                padding: 7px 6px;
-                font-weight: 600;
-                font-size: 10px;
-                border: none;
-                border-bottom: 1px solid {BORDER};
+                color: {TEXT_MUTE}; padding: 7px 6px;
+                font-weight: 600; font-size: 10px;
+                border: none; border-bottom: 1px solid {BORDER};
             }}
             QPushButton {{
-                border: none;
-                border-radius: 8px;
-                padding: 12px 18px;
-                font-size: 13px;
-                font-weight: 600;
+                border: none; border-radius: 8px;
+                padding: 12px 18px; font-size: 13px; font-weight: 600;
                 color: {BG};
             }}
-            QPushButton:disabled {{ opacity: 0.4; }}
+            QPushButton:disabled {{
+                background-color: {BORDER}; color: {TEXT_MUTE};
+            }}
             QTextEdit {{
-                background-color: {SURFACE};
-                color: {TEXT};
-                border: none;
-                border-radius: 6px;
+                background-color: {SURFACE}; color: {TEXT};
+                border: none; border-radius: 6px;
                 font-family: 'JetBrains Mono', 'Consolas', monospace;
                 font-size: 11px;
             }}
@@ -343,23 +398,17 @@ class VilonaMainWindow(QMainWindow):
                 background: {BORDER}; border-radius: 3px; min-height: 30px;
             }}
         """)
-
         # Per-button accent colors
         self.btn_start.setStyleSheet(
             f"background-color: {GREEN}; color: {BG}; padding: 12px 18px;"
             "border-radius: 8px; font-weight: 700; font-size: 13px;"
         )
         self.btn_stop.setStyleSheet(
-            f"background-color: {RED}; color: {BG}; padding: 12px 18px;"
+            f"background-color: {BORDER}; color: {TEXT_MUTE}; padding: 12px 18px;"
             "border-radius: 8px; font-weight: 700; font-size: 13px;"
         )
         self.btn_close_all.setStyleSheet(
             f"background-color: {YELLOW}; color: {BG}; padding: 12px 18px;"
-            "border-radius: 8px; font-weight: 700; font-size: 13px;"
-        )
-        self.btn_stop.setEnabled(False)
-        self.btn_stop.setStyleSheet(
-            f"background-color: {BORDER}; color: {TEXT_MUTE}; padding: 12px 18px;"
             "border-radius: 8px; font-weight: 700; font-size: 13px;"
         )
 
@@ -375,21 +424,28 @@ class VilonaMainWindow(QMainWindow):
         currency = data.get('currency', 'USD') or 'USD'
         self._currency = currency
 
-        # KPIs
+        # KPIs — animate count-up
         bal = data.get('balance', 0.0)
-        self.kpi_balance.set_value(_fmt_amount(bal, currency), TEAL)
-        self.kpi_equity.set_value(_fmt_amount(bal, currency), TEXT)
+        self.kpi_balance.animate_number(bal, currency)
+
+        self.kpi_equity.animate_number(bal, currency)
 
         pl = data.get('daily_pl', 0.0)
         pl_color = GREEN if pl >= 0 else RED
-        pl_prefix = "+" if pl > 0 else ""
-        self.kpi_daily_pl.set_value(_fmt_amount(pl, currency), pl_color)
+        self.kpi_daily_pl.animate_number(pl, currency)
+        if pl >= 0:
+            self.kpi_daily_pl._value_lbl.setStyleSheet(
+                f"color: {GREEN}; font-size: 22px; font-weight: 700;")
 
         wins = data.get('wins', 0)
         total = data.get('total', 0)
         wr = wins / total * 100 if total else 0.0
-        self.kpi_winrate.set_value(f"{wr:.1f}%  ({wins}/{total})", MAUVE)
-        self.kpi_positions.set_value(str(len(positions)), YELLOW)
+        self.kpi_winrate.set_text(f"{wr:.1f}%  ({wins}/{total})", MAUVE)
+
+        n_pos = len(positions)
+        if self.kpi_positions._value_lbl.text() != str(n_pos):
+            self.kpi_positions.flash(YELLOW)
+        self.kpi_positions._value_lbl.setText(str(n_pos))
 
         # Positions table
         self.pos_table.setRowCount(len(positions))
@@ -398,13 +454,17 @@ class VilonaMainWindow(QMainWindow):
             self.pos_table.setItem(row, 1, QTableWidgetItem(pos.symbol))
             self.pos_table.setItem(row, 2, QTableWidgetItem(pos.type.upper()))
             self.pos_table.setItem(row, 3, QTableWidgetItem(f"{pos.volume:.4f}"))
-            self.pos_table.setItem(row, 4, QTableWidgetItem(f"{pos.price_open:.{5}f}"))
-            self.pos_table.setItem(row, 5, QTableWidgetItem(f"{pos.price_current:.{5}f}"))
-            self.pos_table.setItem(row, 6, QTableWidgetItem(f"{pos.sl:.{5}f}" if pos.sl else "—"))
-            self.pos_table.setItem(row, 7, QTableWidgetItem(f"{pos.tp:.{5}f}" if pos.tp else "—"))
+            self.pos_table.setItem(row, 4, QTableWidgetItem(f"{pos.price_open:.5f}"))
+            self.pos_table.setItem(row, 5, QTableWidgetItem(f"{pos.price_current:.5f}"))
+            self.pos_table.setItem(row, 6, QTableWidgetItem(
+                f"{pos.sl:.5f}" if pos.sl else "—"))
+            self.pos_table.setItem(row, 7, QTableWidgetItem(
+                f"{pos.tp:.5f}" if pos.tp else "—"))
             profit = pos.profit
             color_hex = GREEN if profit >= 0 else RED
-            item = QTableWidgetItem(f"{'+' if profit > 0 else ''}{profit:.2f}")
+            item = QTableWidgetItem(
+                f"{'+' if profit > 0 else ''}{profit:.2f}"
+            )
             item.setForeground(QColor(color_hex))
             self.pos_table.setItem(row, 8, item)
 
@@ -412,10 +472,14 @@ class VilonaMainWindow(QMainWindow):
         connected = self.bridge.is_connected()
         if connected:
             self.status_dot.setText("● Connected")
-            self.status_dot.setStyleSheet(f"color: {GREEN}; font-size: 15px; font-weight: 700;")
+            self.status_dot.setStyleSheet(
+                f"color: {GREEN}; font-size: 16px; font-weight: 700;"
+            )
         else:
             self.status_dot.setText("● Disconnected")
-            self.status_dot.setStyleSheet(f"color: {RED}; font-size: 15px; font-weight: 700;")
+            self.status_dot.setStyleSheet(
+                f"color: {RED}; font-size: 16px; font-weight: 700;"
+            )
 
     # ── Scanner controls ───────────────────────────────────────────────────────
     def start_scanner(self):
@@ -439,15 +503,15 @@ class VilonaMainWindow(QMainWindow):
         self._log("Scanner stopped")
 
     def close_all(self):
+        positions = self.bridge.get_positions()
         reply = QMessageBox.question(
             self, 'Confirm Close All',
-            f"Close all {self.bridge.get_positions().__len__()} positions?",
+            f"Close all {len(positions)} positions?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                positions = self.bridge.get_positions()
                 for pos in positions:
                     self.bridge.close_position(pos.ticket, pos.symbol)
                 self._log(f"Closed {len(positions)} positions")
@@ -467,15 +531,19 @@ class VilonaMainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+
     cfg = get_config()
     state_db = StateDB()
+
     if cfg.exchange.name.lower() == 'mt5':
         bridge = MT5Bridge()
     else:
         bridge = CCXTBridge(cfg.exchange)
+
     if not bridge.connect():
         print("Failed to connect to exchange")
         return 1
+
     window = VilonaMainWindow(bridge, cfg, state_db)
     window.show()
     return app.exec()
