@@ -113,19 +113,25 @@ class MT5Bridge:
         """Return account fields used by the UI without leaking MT5 objects."""
         acc = mt5.account_info() if self._connected else None
         if not acc:
-            return {"balance": 0.0, "equity": 0.0, "margin": 0.0, "free_margin": 0.0, "total": 0.0, "free": 0.0}
+            return {"balance": 0.0, "equity": 0.0, "margin": 0.0, "free_margin": 0.0, "total": 0.0, "free": 0.0, "currency": ""}
         balance = float(acc.balance)
         equity = float(acc.equity)
         free_margin = float(acc.margin_free)
+        currency = acc.currency or ''
         return {
             "balance": balance,
             "equity": equity,
             "margin": float(acc.margin),
             "free_margin": free_margin,
-            # Common aliases used by exchange-oriented UI code.
+            "currency": currency,
             "total": equity,
             "free": free_margin,
         }
+    def get_available_symbols(self) -> list[str]:
+        """Return all visible (tradeable) symbols on this broker."""
+        if not self._connected:
+            return []
+        return [s.name for s in (mt5.symbols_get() or []) if s.visible]
 
     # --- Symbol Info ---
     def get_symbol_info(self, symbol: str) -> Optional[SymbolInfo]:
@@ -373,10 +379,16 @@ class MT5Bridge:
         return int(time.time() * 1000)
 
     # --- Candles ---
-    def get_candles(self, symbol: str, timeframe: str, count: int = 500) -> Optional[List[Dict]]:
+    def get_candles(self, symbol: str, timeframe: str, count: int = 500, **kwargs) -> Optional[List[Dict]]:
+        # runtime.py calls with `limit=`; internal callers use `count=`.
+        if 'limit' in kwargs and kwargs['limit'] is not None:
+            count = int(kwargs['limit'])
         if not self._connected:
             return None
-        tf = MTF_TIMEFRAMES.get(timeframe.upper())
+        # Map runtime names ("15m", "1h") to MT5 enum keys ("M15", "H1").
+        tf_key = {'15m': 'M15', '1h': 'H1', '1m': 'M1', '5m': 'M5',
+                  '30m': 'M30', '4h': 'H4', '1d': 'D1'}.get(timeframe.lower(), timeframe.upper())
+        tf = MTF_TIMEFRAMES.get(tf_key)
         if tf is None:
             return None
         rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)

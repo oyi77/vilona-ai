@@ -5,12 +5,12 @@
 
 """\nqt.py\n=====\nTitik impor Qt TUNGGAL untuk seluruh package `kingai` - modul lain mengimpor\nkelas Qt dari sini, bukan langsung dari PySide2. Kalau binding Qt suatu saat\ndiganti (mis. PySide6), cukup file ini yang diubah.\n\nPySide2 (Qt 5.15) dipilih karena mendukung Windows 7 s/d 11 sekaligus,\nsama seperti QueenAI.\n"""
 try:
-    from PySide2 import QtCore, QtGui, QtWidgets
+    from PySide6 import QtCore, QtGui, QtWidgets
 except ImportError:
     try:
-        from PySide6 import QtCore, QtGui, QtWidgets
+        from PySide2 import QtCore, QtGui, QtWidgets
     except ImportError as exc:
-        raise RuntimeError('Vilona AI requires PySide2 or PySide6 to be installed.') from exc
+        raise RuntimeError('Vilona AI requires PySide6 or PySide2 to be installed.') from exc
 Qt = QtCore.Qt
 Signal = QtCore.Signal
 Property = QtCore.Property
