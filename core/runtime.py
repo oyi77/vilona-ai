@@ -23,6 +23,7 @@ from config import Config, TradingConfig
 from core.events import TradeEvent
 from core.health import HealthSnapshot
 from core.state_db import StateDB
+from core.judge_circuit_breaker import JudgeCircuitBreaker
 from trading.execution import ExecutionPort, ExecutionRequest, LiveExecutionAdapter, PaperExecutionAdapter
 
 # KingAI-parity guards & observability (wired via config flags; zero overhead when disabled)
@@ -81,6 +82,7 @@ class RuntimeSupervisor:
             logger.warning("session_guard load failed: %s", e)
             self._session_state = None
         self.judge_client = judge_client
+        self.judge_breaker = JudgeCircuitBreaker()
         self.execution: ExecutionPort = (
             PaperExecutionAdapter(bridge)
             if config.paper_trading
@@ -251,11 +253,21 @@ class RuntimeSupervisor:
             if not verdict.approved:
                 return ScanResult(symbol, signal.action, False, verdict.reason)
             if self.judge_client and signal.action != "WAIT":
-                judged = await self.judge_client.generate_signal(JUDGE_PROMPT, build_judge_prompt(signal, verdict))
-                approved, reason = parse_judge(judged or "")
-                self._event("judge_decision", symbol, {"approved": approved, "reason": reason})
+                if not self.judge_breaker.allow():
+                    self._event("judge_decision", symbol, {"approved": False, "reason": "judge circuit open"})
+                    return ScanResult(symbol, signal.action, False, "judge circuit open")
+                try:
+                    judged = await self.judge_client.generate_signal(JUDGE_PROMPT, build_judge_prompt(signal, verdict))
+                    approved, reason = parse_judge(judged or "")
+                except Exception as e:
+                    self.judge_breaker.record_failure()
+                    self._event("judge_decision", symbol, {"approved": False, "reason": f"judge exception: {e}"})
+                    return ScanResult(symbol, signal.action, False, f"judge exception: {e}")
                 if not approved:
+                    self.judge_breaker.record_failure()
+                    self._event("judge_decision", symbol, {"approved": False, "reason": reason})
                     return ScanResult(symbol, signal.action, False, f"judge veto: {reason}")
+                self.judge_breaker.record_success()
             request = ExecutionRequest(symbol, signal.action, verdict.lot_size, verdict.sl_price, verdict.tp_price, key, signal.reason)
             execution = self.execution.submit(request)
             payload = {"accepted": execution.accepted, "paper": execution.paper, "ticket": execution.ticket, "message": execution.message}

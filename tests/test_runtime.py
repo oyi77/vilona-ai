@@ -78,6 +78,39 @@ def test_runtime_rejects_stale_market_data_without_order():
     assert bridge.orders == []
 
 
+
+class RaisingJudge:
+    async def generate_signal(self, *_args):
+        raise RuntimeError("judge unavailable")
+
+
+class ApprovingJudge:
+    async def generate_signal(self, *_args):
+        return '{"verdict":"APPROVE","reason":"approved"}'
+
+
+def test_runtime_vetoes_when_judge_call_raises():
+    bridge = RuntimeBridge()
+    cfg = Config(trading=TradingConfig(symbols=["BTC/USDT"], max_data_age_seconds=120), paper_trading=True)
+    runtime = RuntimeSupervisor(bridge, cfg, state_db=StateDB(":memory:"), signal_provider=BuyProvider(), judge_client=RaisingJudge())
+    result = asyncio.run(runtime.scan_once("BTC/USDT"))
+    assert result.approved is False
+    assert "judge exception" in result.reason
+    assert runtime.execution.get_positions("BTC/USDT") == []
+    assert runtime.judge_breaker.failure_count == 1
+
+
+def test_runtime_vetoes_when_judge_circuit_is_open():
+    bridge = RuntimeBridge()
+    cfg = Config(trading=TradingConfig(symbols=["BTC/USDT"], max_data_age_seconds=120), paper_trading=True)
+    runtime = RuntimeSupervisor(bridge, cfg, state_db=StateDB(":memory:"), signal_provider=BuyProvider(), judge_client=ApprovingJudge())
+    runtime.judge_breaker.failure_threshold = 1
+    runtime.judge_breaker.record_failure()
+    result = asyncio.run(runtime.scan_once("BTC/USDT"))
+    assert result.approved is False
+    assert result.reason == "judge circuit open"
+    assert runtime.execution.get_positions("BTC/USDT") == []
+
 def test_emergency_stop_blocks_restart():
     bridge = RuntimeBridge()
     cfg = Config(trading=TradingConfig(symbols=["BTC/USDT"], scan_interval=1), paper_trading=True)
