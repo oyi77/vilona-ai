@@ -41,6 +41,14 @@ def evaluate_tick_freshness(*, tick_timestamp_s: float | None,
     return MarketGuardDecision(True, "tick fresh")
 
 
+def is_forex_symbol(symbol: str) -> bool:
+    """Return True for MT5-style FX/metals symbols, not crypto pairs."""
+    normalized = "".join(ch for ch in str(symbol).upper() if ch.isalnum())
+    if "/" in str(symbol) or normalized.endswith(("USDT", "USDC", "BTC", "ETH")):
+        return False
+    return len(normalized) in (6, 7) and normalized[-3:] in {"USD", "EUR", "JPY", "GBP", "CHF", "AUD", "CAD", "NZD", "XAU", "XAG"}
+
+
 def evaluate_weekend_guard(*, server_epoch_s: float | None,
                            entry_cutoff_min: int = 120,
                            open_grace_min: int = 30) -> MarketGuardDecision:

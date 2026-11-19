@@ -111,6 +111,46 @@ def test_runtime_vetoes_when_judge_circuit_is_open():
     assert result.reason == "judge circuit open"
     assert runtime.execution.get_positions("BTC/USDT") == []
 
+
+def test_forex_weekend_guard_blocks_using_tick_server_time():
+    from datetime import datetime, timezone
+    from core.market_guard import evaluate_weekend_guard, is_forex_symbol
+    assert is_forex_symbol("EURUSD")
+    assert not is_forex_symbol("BTC/USDT")
+    # Friday 21:00 UTC, inside default two-hour cutoff.
+    ts = datetime(2026, 11, 20, 21, 0, tzinfo=timezone.utc).timestamp()
+    decision = evaluate_weekend_guard(server_epoch_s=ts)
+    assert decision.allowed is False
+    assert "weekend" in decision.reason
+
+
+def test_runtime_blocks_forex_weekend_and_allows_crypto():
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from core.runtime import RuntimeSupervisor
+    from core.state_db import StateDB
+    from config import Config, TradingConfig
+
+    class ForexBridge(RuntimeBridge):
+        def __init__(self):
+            super().__init__()
+            self.tick.symbol = "EURUSD"
+            self.tick.timestamp_ms = int(datetime(2026, 11, 20, 21, 0, tzinfo=timezone.utc).timestamp() * 1000)
+
+    forex = ForexBridge()
+    cfg = Config(trading=TradingConfig(symbols=["EURUSD"], max_data_age_seconds=10_000_000), paper_trading=True)
+    runtime = RuntimeSupervisor(forex, cfg, state_db=StateDB(":memory:"), signal_provider=BuyProvider())
+    result = asyncio.run(runtime.scan_once("EURUSD"))
+    assert result.approved is False
+    assert "weekend" in result.reason
+    assert runtime.execution.get_positions("EURUSD") == []
+
+    crypto = RuntimeBridge()
+    cfg = Config(trading=TradingConfig(symbols=["BTC/USDT"], max_data_age_seconds=120), paper_trading=True)
+    runtime = RuntimeSupervisor(crypto, cfg, state_db=StateDB(":memory:"), signal_provider=BuyProvider())
+    result = asyncio.run(runtime.scan_once("BTC/USDT"))
+    assert result.approved is True
+
 def test_emergency_stop_blocks_restart():
     bridge = RuntimeBridge()
     cfg = Config(trading=TradingConfig(symbols=["BTC/USDT"], scan_interval=1), paper_trading=True)

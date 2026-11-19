@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Protocol
 import time
 
 from trading.bridge_ccxt import Position
+from core.order_safety import place_protected_order
+
 
 
 @dataclass(frozen=True)
@@ -59,18 +61,35 @@ class LiveExecutionAdapter:
         return float(balance.get("equity", balance.get("total", 0.0)) or 0.0)
 
     def submit(self, request: ExecutionRequest) -> ExecutionResult:
-        ok, message, ticket = self.bridge.send_market_order(
-            request.symbol, request.action, request.quantity, request.sl, request.tp
+        class _SafetyBridge:
+            def __init__(self, bridge: Any):
+                self.bridge = bridge
+
+            def send_market_order(self, **kwargs: Any):
+                ok, message, ticket = self.bridge.send_market_order(
+                    kwargs["symbol"], kwargs["action"], kwargs["volume"],
+                    kwargs.get("sl"), kwargs.get("tp"), kwargs.get("magic"),
+                )
+                return type("Trade", (), {"success": ok, "message": message, "ticket": ticket})()
+
+            def get_positions(self, symbol: str):
+                return self.bridge.get_positions(symbol)
+
+            def modify_position_sltp(self, ticket: int, symbol: str, sl=None, tp=None):
+                return self.bridge.modify_position_sltp(ticket, symbol, sl, tp)
+
+            def close_position(self, ticket: int, symbol: str, volume=None):
+                return self.bridge.close_position(ticket, symbol)
+
+        protected = place_protected_order(
+            _SafetyBridge(self.bridge), symbol=request.symbol, action=request.action,
+            volume=request.quantity, sl=request.sl, tp=request.tp,
         )
         return ExecutionResult(
-            accepted=ok,
-            paper=False,
-            symbol=request.symbol,
-            action=request.action,
-            quantity=request.quantity,
-            ticket=str(ticket) if ticket is not None else None,
-            message=message,
-            client_order_id=request.client_order_id,
+            accepted=protected.success, paper=False, symbol=request.symbol,
+            action=request.action, quantity=request.quantity,
+            ticket=str(protected.ticket) if protected.ticket is not None else None,
+            message=protected.message, client_order_id=request.client_order_id,
         )
 
     def close_position(self, ticket: int, symbol: str) -> tuple[bool, str]:

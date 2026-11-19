@@ -24,15 +24,12 @@ from core.events import TradeEvent
 from core.health import HealthSnapshot
 from core.state_db import StateDB
 from core.judge_circuit_breaker import JudgeCircuitBreaker
+from core.market_guard import evaluate_weekend_guard, is_forex_symbol
 from trading.execution import ExecutionPort, ExecutionRequest, LiveExecutionAdapter, PaperExecutionAdapter
-
-# KingAI-parity guards & observability (wired via config flags; zero overhead when disabled)
 from trading import news_guard, session_guard
 from trading.recorder import recorder
-from llm import budget as llm_budget
-
+# KingAI-parity guards & observability
 logger = logging.getLogger(__name__)
-
 
 class SignalProvider(Protocol):
     async def generate(self, snapshot: MarketSnapshot) -> Signal: ...
@@ -222,6 +219,15 @@ class RuntimeSupervisor:
                 result = ScanResult(symbol, "WAIT", False, "market data unavailable")
                 self._event("scan_skipped", symbol, {"reason": result.reason})
                 return result
+            if is_forex_symbol(symbol):
+                tick = self.bridge.get_tick(symbol)
+                decision = evaluate_weekend_guard(
+                    server_epoch_s=(float(tick.timestamp_ms) / 1000.0) if tick else None,
+                )
+                if not decision.allowed:
+                    result = ScanResult(symbol, "WAIT", False, decision.reason)
+                    self._event("scan_skipped", symbol, {"reason": result.reason})
+                    return result
             positions = self.execution.get_positions(symbol)
             pl, _, _ = self.bridge.calculate_daily_pl(symbol)
             # KingAI-parity budget gate (llm/budget.py)
