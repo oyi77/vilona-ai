@@ -2,6 +2,18 @@
 
 All notable changes are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [v2.2.6] — 2026-11-21
+
+### Added
+
+- Fail-closed judge circuit breaker, Forex-only weekend guard, protected live orders, and paper-mode stop-loss enforcement.
+- CSV bulk license registration with dry-run default and explicit `--apply`.
+
+### Changed
+
+- `ExecutionRequest.magic` now propagates through live and paper execution adapters.
+- Runtime order construction uses keywords to prevent request-field misbinding.
+
 ## [Unreleased]
 
 ### Added

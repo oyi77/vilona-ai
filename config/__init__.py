@@ -79,6 +79,8 @@ class TradingConfig:
     budget_limit_daily: int = 0  # 0 = unlimited
     budget_on_limit: str = "stop"  # "stop" | "free"
     recorder_enabled: bool = True
+    weekend_entry_cutoff_min: int = 120
+    weekend_open_grace_min: int = 30
 
 @dataclass
 class DatabaseConfig:
@@ -89,8 +91,7 @@ class DatabaseConfig:
 @dataclass
 class BuildConfig:
     """Build configuration for packaging"""
-    version: str = "Vilona AI-v2.2"
-    icon_path: Optional[str] = None
+    version: str = "Vilona AI-v2.2.6"
 
 
 @dataclass
@@ -162,6 +163,8 @@ class Config:
         config.trading.max_risk_per_trade_pct = float(os.getenv("vilona_MAX_RISK_PCT", str(config.trading.max_risk_per_trade_pct)))
         config.trading.max_daily_loss_pct = float(os.getenv("vilona_MAX_DAILY_LOSS_PCT", str(config.trading.max_daily_loss_pct)))
         config.trading.max_data_age_seconds = int(os.getenv("vilona_MAX_DATA_AGE_SECONDS", str(config.trading.max_data_age_seconds)))
+        config.trading.weekend_entry_cutoff_min = int(os.getenv("vilona_MARKET_GUARD_ENTRY_CUTOFF_MIN", str(config.trading.weekend_entry_cutoff_min)))
+        config.trading.weekend_open_grace_min = int(os.getenv("vilona_MARKET_GUARD_OPEN_GRACE_MIN", str(config.trading.weekend_open_grace_min)))
         config.paper_trading = os.getenv("vilona_PAPER_TRADING", "true").lower() == "true"
         config.trading.paper_trading = config.paper_trading
         
@@ -310,8 +313,7 @@ DATA_DIR = DATA_ROOT / 'data'
 CACHE_DIR = DATA_DIR / 'cache'
 
 APP_NAME = 'Vilona AI'
-APP_SLUG = 'vilona-ai'
-APP_VERSION = '2.0.0'
+APP_VERSION = '2.2.6'
 PROJECT_ROOT = DATA_ROOT
 
 from pathlib import Path as _Path

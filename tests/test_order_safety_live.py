@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import time
 
-from core.order_safety import place_protected_order
-from trading.bridge_ccxt import Position, SymbolInfo, Tick
 from trading.execution import ExecutionRequest, LiveExecutionAdapter
+from trading.bridge_ccxt import Position, SymbolInfo, Tick
 
 class RuntimeBridge:
     def __init__(self):
@@ -24,6 +23,7 @@ class ProtectedBridge(RuntimeBridge):
 
     def send_market_order(self, symbol, action, volume, sl=None, tp=None, magic=None):
         ticket = 55
+        self.last_magic = magic
         self._positions = [Position(ticket=ticket, symbol=symbol, type="buy", price_open=100.1, sl=sl or 0.0, tp=tp or 0.0, volume=volume, price_current=100.1, comment="vilona-auto", magic=magic or 0)]
         return True, "placed", ticket
 
@@ -67,9 +67,10 @@ def test_live_adapter_refuses_missing_sl_before_broker_call():
 def test_live_adapter_uses_protected_order_and_verifies_sl():
     bridge = ProtectedBridge()
     adapter = LiveExecutionAdapter(bridge)
-    result = adapter.submit(ExecutionRequest("BTC/USDT", "BUY", 0.1, sl=99.0, tp=110.0))
+    result = adapter.submit(ExecutionRequest("BTC/USDT", "BUY", 0.1, sl=99.0, tp=110.0, magic=123456))
     assert result.accepted is True
     assert result.ticket == "55"
+    assert bridge.last_magic == 123456
     assert bridge.get_positions("BTC/USDT")[0].sl == 99.0
 
 

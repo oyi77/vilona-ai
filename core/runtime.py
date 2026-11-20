@@ -27,6 +27,7 @@ from core.judge_circuit_breaker import JudgeCircuitBreaker
 from core.market_guard import evaluate_weekend_guard, is_forex_symbol
 from trading.execution import ExecutionPort, ExecutionRequest, LiveExecutionAdapter, PaperExecutionAdapter
 from trading import news_guard, session_guard
+from llm import budget as llm_budget
 from trading.recorder import recorder
 # KingAI-parity guards & observability
 logger = logging.getLogger(__name__)
@@ -223,6 +224,8 @@ class RuntimeSupervisor:
                 tick = self.bridge.get_tick(symbol)
                 decision = evaluate_weekend_guard(
                     server_epoch_s=(float(tick.timestamp_ms) / 1000.0) if tick else None,
+                    entry_cutoff_min=getattr(self.config.trading, "weekend_entry_cutoff_min", 120),
+                    open_grace_min=getattr(self.config.trading, "weekend_open_grace_min", 30),
                 )
                 if not decision.allowed:
                     result = ScanResult(symbol, "WAIT", False, decision.reason)
@@ -274,7 +277,7 @@ class RuntimeSupervisor:
                     self._event("judge_decision", symbol, {"approved": False, "reason": reason})
                     return ScanResult(symbol, signal.action, False, f"judge veto: {reason}")
                 self.judge_breaker.record_success()
-            request = ExecutionRequest(symbol, signal.action, verdict.lot_size, verdict.sl_price, verdict.tp_price, key, signal.reason)
+            request = ExecutionRequest(symbol=symbol, action=signal.action, quantity=verdict.lot_size, sl=verdict.sl_price, tp=verdict.tp_price, client_order_id=key, reason=signal.reason)
             execution = self.execution.submit(request)
             payload = {"accepted": execution.accepted, "paper": execution.paper, "ticket": execution.ticket, "message": execution.message}
             self._event("order_filled" if execution.accepted else "order_failed", symbol, payload)

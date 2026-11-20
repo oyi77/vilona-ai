@@ -40,11 +40,29 @@ class RuntimeBridge:
 def test_paper_adapter_never_calls_broker_order():
     bridge = RuntimeBridge()
     adapter = PaperExecutionAdapter(bridge, starting_equity=10000)
-    result = adapter.submit(ExecutionRequest("BTC/USDT", "BUY", 0.5))
+    result = adapter.submit(ExecutionRequest("BTC/USDT", "BUY", 0.5, sl=99.0))
     assert result.accepted and result.paper
     assert result.fill_price == 100.1
     assert bridge.orders == []
     assert len(adapter.get_positions("BTC/USDT")) == 1
+
+
+def test_paper_adapter_refuses_missing_stop_loss_without_broker_call():
+    bridge = RuntimeBridge()
+    adapter = PaperExecutionAdapter(bridge, starting_equity=10000)
+    result = adapter.submit(ExecutionRequest("BTC/USDT", "BUY", 0.5))
+    assert result.accepted is False
+    assert "stop-loss" in result.message
+    assert bridge.orders == []
+    assert adapter.get_positions("BTC/USDT") == []
+
+
+def test_paper_adapter_records_explicit_magic():
+    bridge = RuntimeBridge()
+    adapter = PaperExecutionAdapter(bridge, starting_equity=10000)
+    result = adapter.submit(ExecutionRequest("BTC/USDT", "BUY", 0.5, sl=99.0, magic=424242))
+    assert result.accepted is True
+    assert adapter.get_positions("BTC/USDT")[0].magic == 424242
 
 
 class BuyProvider:

@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol
-import time
 
 from trading.bridge_ccxt import Position
-from core.order_safety import place_protected_order
+from core.order_safety import place_protected_order, resolve_magic
 
 
 
@@ -21,6 +20,7 @@ class ExecutionRequest:
     quantity: float
     sl: Optional[float] = None
     tp: Optional[float] = None
+    magic: Optional[int] = None
     client_order_id: str = ""
     reason: str = ""
 
@@ -83,7 +83,7 @@ class LiveExecutionAdapter:
 
         protected = place_protected_order(
             _SafetyBridge(self.bridge), symbol=request.symbol, action=request.action,
-            volume=request.quantity, sl=request.sl, tp=request.tp,
+            volume=request.quantity, sl=request.sl, tp=request.tp, magic=request.magic,
         )
         return ExecutionResult(
             accepted=protected.success, paper=False, symbol=request.symbol,
@@ -119,6 +119,8 @@ class PaperExecutionAdapter:
         action = request.action.upper()
         if action not in ("BUY", "SELL") or request.quantity <= 0:
             return ExecutionResult(False, True, request.symbol, action, request.quantity, message="invalid paper order", client_order_id=request.client_order_id)
+        if request.sl is None or float(request.sl) <= 0:
+            return ExecutionResult(False, True, request.symbol, action, request.quantity, message="refused: order has no stop-loss", client_order_id=request.client_order_id)
         price = float(tick.ask if action == "BUY" else tick.bid)
         ticket = self._next_ticket
         self._next_ticket += 1
@@ -127,11 +129,12 @@ class PaperExecutionAdapter:
             symbol=request.symbol,
             type=action.lower(),
             price_open=price,
-            sl=float(request.sl or 0.0),
+            sl=float(request.sl),
             tp=float(request.tp or 0.0),
             volume=float(request.quantity),
             price_current=price,
             comment="paper",
+            magic=int(request.magic or resolve_magic(request.symbol)),
         )
         return ExecutionResult(True, True, request.symbol, action, request.quantity, price, str(ticket), "paper fill", request.client_order_id)
 
