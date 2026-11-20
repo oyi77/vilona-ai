@@ -8,18 +8,15 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 
-from PySide6.QtWidgets import (
+from core.qt import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTableWidget, QTableWidgetItem, QHeaderView,
     QFrame, QGridLayout, QSplitter, QTextEdit, QStatusBar,
-    QSystemTrayIcon, QMenu, QStyle, QMessageBox,
-    QLineEdit, QComboBox, QDoubleSpinBox, QSizePolicy,
+    QSystemTrayIcon, QMenu, QStyle, QMessageBox, QLineEdit,
+    QComboBox, QDoubleSpinBox, QSizePolicy, Qt, QTimer, Signal,
+    QThread, QPropertyAnimation, QEasingCurve, QRectF, QAction,
+    QIcon, QColor, QPalette, QFont, QPainter,
 )
-from PySide6.QtCore import (
-    Qt, QTimer, Signal, QThread, QPropertyAnimation, QEasingCurve, QRectF,
-)
-from PySide6.QtGui import QAction, QIcon, QColor, QPalette, QFont, QPainter
-
 import pyqtgraph as pg
 
 from config import get_config, DATA_DIR

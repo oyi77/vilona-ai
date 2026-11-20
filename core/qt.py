@@ -5,12 +5,14 @@
 
 """\nqt.py\n=====\nTitik impor Qt TUNGGAL untuk seluruh package `kingai` - modul lain mengimpor\nkelas Qt dari sini, bukan langsung dari PySide2. Kalau binding Qt suatu saat\ndiganti (mis. PySide6), cukup file ini yang diubah.\n\nPySide2 (Qt 5.15) dipilih karena mendukung Windows 7 s/d 11 sekaligus,\nsama seperti QueenAI.\n"""
 try:
-    from PySide6 import QtCore, QtGui, QtWidgets
+    from PyQt6 import QtCore, QtGui, QtWidgets
+    QtCore.Signal = QtCore.pyqtSignal
+    QtCore.Property = QtCore.pyqtProperty
 except ImportError:
     try:
-        from PySide2 import QtCore, QtGui, QtWidgets
+        from PySide6 import QtCore, QtGui, QtWidgets
     except ImportError as exc:
-        raise RuntimeError('Vilona AI requires PySide6 or PySide2 to be installed.') from exc
+        raise RuntimeError('Vilona AI requires PyQt6 or PySide6 to be installed.') from exc
 Qt = QtCore.Qt
 Signal = QtCore.Signal
 Property = QtCore.Property
@@ -95,6 +97,19 @@ QFileDialog = QtWidgets.QFileDialog
 QGraphicsOpacityEffect = QtWidgets.QGraphicsOpacityEffect
 QShortcut = getattr(QtWidgets, 'QShortcut', QtGui.QShortcut)
 QMenu = QtWidgets.QMenu
+QMainWindow = QtWidgets.QMainWindow
+QTableWidget = QtWidgets.QTableWidget
+QTableWidgetItem = QtWidgets.QTableWidgetItem
+QHeaderView = QtWidgets.QHeaderView
+QSplitter = QtWidgets.QSplitter
+QTextEdit = QtWidgets.QTextEdit
+QStatusBar = QtWidgets.QStatusBar
+QSystemTrayIcon = QtWidgets.QSystemTrayIcon
+QStyle = QtWidgets.QStyle
+QPalette = QtGui.QPalette
+QAction = QtGui.QAction
+QThread = QtCore.QThread
+
 def qapp_exec(app) -> int:
     """PySide2/Qt5 memakai `exec_()`, sementara Qt6 memakai `exec()`."""
     exec_func = getattr(app, 'exec', None)

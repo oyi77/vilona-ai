@@ -1,6 +1,5 @@
 """Stub for KingAI assets — icons/brand not available, returns blank."""
-from PySide6.QtCore import QSize
-from PySide6.QtGui import QPixmap, QColor
+from core.qt import QSize, QPixmap, QColor
 
 def pixmap(path):
     pm = QPixmap(20, 20)
